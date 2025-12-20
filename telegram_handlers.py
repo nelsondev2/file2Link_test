@@ -51,7 +51,7 @@ async def start_command(client, message):
         await message.reply_text("❌ Error al procesar el comando.")
 
 async def handle_file(client, message):
-    """Maneja la recepción de archivos - VERSIÓN SIMPLIFICADA"""
+    """Maneja la recepción de archivos - VERSIÓN MEJORADA"""
     try:
         user = message.from_user
         user_id = user.id
@@ -112,30 +112,38 @@ async def handle_file(client, message):
             await processing_msg.edit_text("❌ Error generando URLs")
             return
         
-        # Preparar respuesta
-        response = f"""✅ **¡Archivo #{result['number']} Procesado!**
+        # Preparar respuesta MEJORADA
+        size_mb = file_size / (1024 * 1024)
+        file_number = result['number']
+        actual_name = file_info['name']  # Nombre real extraído
+        
+        response = f"""✅ **¡Archivo #{file_number} Procesado!**
 
 **📁 Información:**
-• **Nombre:** `{file_name}`
-• **Tamaño:** {file_size/1024/1024:.1f}MB
+• **Nombre:** `{actual_name}`
+• **Tamaño:** {size_mb:.1f}MB
+• **Tipo:** {file_info.get('type', 'archivo')}
 
 **🔗 Enlaces de Descarga:**
 
 **1. Descarga Directa:**
-[{file_name}]({file_info['urls'].get('download_url', '#')})
+[⬇️ {actual_name}]({file_info['urls'].get('download_url', '#')})
 
 **2. Abrir en Telegram:**
-[Abrir en app]({file_info['urls'].get('deep_link', '#')})
+[📱 Abrir en app]({file_info['urls'].get('deep_link', '#')})
+
+**3. URL Directa (para copiar):**
+`{file_info['urls'].get('real_download_url', file_info['urls'].get('download_url', '#'))}`
 
 **💾 Para gestionar:**
 • `/list` - Ver todos tus archivos
-• `/delete {result['number']}` - Eliminar este archivo
+• `/delete {file_number}` - Eliminar este archivo
 
 ⚠️ **Nota:** Los enlaces funcionan mientras el bot esté activo."""
 
         await processing_msg.edit_text(response, disable_web_page_preview=False)
         
-        logger.info(f"✅ Archivo procesado: #{result['number']} para {user_id}")
+        logger.info(f"✅ Archivo procesado: #{file_number} - {actual_name} para {user_id}")
         
     except Exception as e:
         logger.error(f"❌ Error procesando archivo: {e}", exc_info=True)
@@ -145,7 +153,7 @@ async def handle_file(client, message):
             pass
 
 async def list_command(client, message):
-    """Lista archivos del usuario"""
+    """Lista archivos del usuario - VERSIÓN MEJORADA"""
     try:
         user_id = message.from_user.id
         
@@ -172,13 +180,15 @@ async def list_command(client, message):
             display_name = file_info['name'][:30] + "..." if len(file_info['name']) > 30 else file_info['name']
             
             response += f"**#{file_info['number']}** - `{display_name}`\n"
-            response += f"📏 {size_mb:.1f}MB | 🔗 [Descargar]({file_info['urls'].get('deep_link', '#')})\n\n"
+            response += f"📏 {size_mb:.1f}MB | 📅 {file_info.get('date', '')}\n"
+            response += f"🔗 [Descargar]({file_info['urls'].get('deep_link', '#')})\n\n"
         
         if len(files) > 10:
             response += f"📄 *Mostrando 10 de {len(files)} archivos*\n\n"
         
         response += "**Comandos:**\n"
         response += "• `/delete N` - Eliminar archivo #N\n"
+        response += "• `/status` - Ver estadísticas\n"
         
         await list_msg.edit_text(response, disable_web_page_preview=True)
         
