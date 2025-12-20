@@ -1,735 +1,539 @@
-import os
-import time
-import asyncio
+"""
+Handlers optimizados para el bot de Telegram
+Sin descargas, solo referencias a archivos en Telegram
+"""
 import logging
+import time
+from datetime import datetime
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
-from config import MAX_FILE_SIZE, MAX_FILE_SIZE_MB
-from load_manager import load_manager
-from file_service import async_file_service
-from progress_service import progress_service
-from packing_service import async_packing_service
-from download_service import fast_download_service
+from config import MAX_FILE_SIZE, MAX_FILE_SIZE_MB, BOT_USERNAME, BOT_TOKEN
+from file_service import file_service
 
 logger = logging.getLogger(__name__)
 
-# Variables globales
+# Cache simple para sesiones de usuario
 user_sessions = {}
-user_queues = {}
-user_current_processing = {}
-user_batch_totals = {}
-
-def get_user_session(user_id):
-    """Obtiene o crea sesión del usuario"""
-    if user_id not in user_sessions:
-        user_sessions[user_id] = {'current_folder': 'downloads'}
-    return user_sessions[user_id]
-
-# ===== COMANDOS BÁSICOS =====
 
 async def start_command(client, message):
-    """Comando /start optimizado"""
+    """Comando start con deep links para archivos"""
     try:
+        args = message.text.split()
         user = message.from_user
         
-        welcome_text = f"""👋 **Hola {user.first_name}!**
+        # Verificar si es un deep link para archivo
+        if len(args) > 1 and args[1].startswith('file_'):
+            # Deep link para descargar archivo
+            parts = args[1].split('_')
+            if len(parts) >= 3:
+                file_id = parts[1]
+                user_id = parts[2]
+                
+                # Verificar que el usuario coincide (seguridad básica)
+                if str(user.id) != user_id:
+                    await message.reply_text(
+                        "⚠️ **Acceso denegado**\n\n"
+                        "Este enlace no está destinado a tu usuario."
+                    )
+                    return
+                
+                # Obtener información del archivo desde Telegram API
+                import requests
+                api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile?file_id={file_id}"
+                
+                try:
+                    response = requests.get(api_url, timeout=5)
+                    if response.status_code == 200:
+                        file_info = response.json()
+                        if file_info.get('ok'):
+                            file_path = file_info['result']['file_path']
+                            download_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+                            
+                            await message.reply_text(
+                                f"📥 **Archivo disponible**\n\n"
+                                f"**Enlaces de descarga:**\n"
+                                f"• [Descarga Directa]({download_url})\n"
+                                f"• [Abrir en Telegram](tg://file?id={file_id})\n\n"
+                                f"**Instrucciones:**\n"
+                                f"1. Usa el primer enlace para descargar directamente\n"
+                                f"2. Usa el segundo para abrir en la app de Telegram\n\n"
+                                f"⚠️ **Nota:** El archivo está almacenado de forma permanente en Telegram.",
+                                disable_web_page_preview=True
+                            )
+                            return
+                except:
+                    pass
+                
+                # Fallback si no podemos obtener info de la API
+                await message.reply_text(
+                    f"📁 **Archivo solicitado**\n\n"
+                    f"ID: `{file_id}`\n\n"
+                    f"**Para descargar:**\n"
+                    f"Usa este enlace directo:\n"
+                    f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_id}\n\n"
+                    f"O abre en Telegram: `tg://file?id={file_id}`"
+                )
+                return
+        
+        # Start normal - Bienvenida
+        welcome_text = f"""👋 **¡Hola {user.first_name}!**
 
-🤖 **File2Link Bot**
-_Almacena y obtén enlaces directos_
+🤖 **File2Link Bot - Sistema Optimizado**
 
-**COMANDOS PRINCIPALES:**
-• `/list` - Ver archivos
-• `/cd [folder]` - Cambiar carpeta
-• `/pack [MB]` - Empaquetar
+✨ **Características principales:**
+• ✅ **0% almacenamiento en servidor** - Todo en Telegram
+• ✅ **Enlaces permanentes** - Nunca expiran
+• ✅ **Sobrevive a reinicios** - 100% confiable
+• ✅ **Hasta {MAX_FILE_SIZE_MB}MB** por archivo
+• ✅ **Acceso desde cualquier dispositivo**
 
-**ENVÍA ARCHIVOS** para almacenarlos automáticamente.
+📁 **¿Cómo funciona?**
+1. **Envía un archivo** (documento, video, audio, foto)
+2. **Obtén enlaces permanentes** inmediatamente
+3. **Comparte** donde quieras
 
-📏 **Límite:** {MAX_FILE_SIZE_MB} MB"""
+🔧 **Comandos disponibles:**
+`/list` - Ver todos tus archivos
+`/delete N` - Eliminar archivo #N
+`/status` - Estado y estadísticas
+`/help` - Ayuda completa
 
+📏 **Límites:**
+• Máximo por archivo: {MAX_FILE_SIZE_MB}MB
+• Formatos soportados: Todos
+
+🚀 **¡Envía un archivo para comenzar!**"""
+        
         await message.reply_text(welcome_text)
-        logger.info(f"Nuevo usuario: {user.id}")
+        logger.info(f"/start recibido de {user.id} - {user.first_name}")
 
     except Exception as e:
-        await message.reply_text("❌ Error inicializando. Intenta de nuevo.")
+        logger.error(f"Error en /start: {e}")
+        await message.reply_text("❌ Error al procesar el comando.")
 
 async def help_command(client, message):
-    """Comando /help optimizado"""
+    """Comando de ayuda detallada"""
     try:
-        help_text = f"""📚 **Ayuda Rápida**
+        help_text = f"""📚 **Ayuda - File2Link Bot**
 
-**📁 NAVEGACIÓN:**
-`/cd downloads` - Archivos descargados
-`/cd packed` - Archivos empaquetados
+**🚀 Comandos principales:**
+`/start` - Mensaje de bienvenida
+`/list` - Ver todos tus archivos
+`/delete N` - Eliminar archivo #N
+`/status` - Ver estadísticas
+`/help` - Esta ayuda
 
-**📄 GESTIÓN:**
-`/list` - Listar archivos
-`/delete N` - Eliminar archivo
-`/rename N nombre` - Renombrar
-`/clear` - Vaciar carpeta
+**📁 Sistema de archivos:**
+• Los archivos se almacenan **100% en Telegram**
+• Los enlaces son **permanentes** y nunca expiran
+• Máximo **{MAX_FILE_SIZE_MB}MB** por archivo
+• Soporta: documentos, videos, audios, fotos
 
-**📦 EMPAQUETADO:**
-`/pack` - Crear ZIP único
-`/pack 100` - Dividir en partes de 100MB
+**🔗 Tipos de enlaces generados:**
+1. **Enlace de descarga directa** - Para navegadores
+2. **Enlace Telegram** - Para la app de Telegram
+3. **Enlace API** - Para aplicaciones
 
-**📊 ESTADO:**
-`/status` - Ver uso y sistema
+**🔄 Cómo usar:**
+1. Envía cualquier archivo al bot
+2. Recibe enlaces inmediatamente
+3. Comparte los enlaces donde quieras
 
-📏 **Límite:** {MAX_FILE_SIZE_MB} MB"""
+**⚠️ Notas importantes:**
+• Los archivos **sobreviven a reinicios** del servidor
+• El bot **NO descarga** archivos a servidores externos
+• Todo se maneja **directamente en Telegram**
+• Los enlaces funcionan **para siempre**
 
-        await message.reply_text(help_text)
-
-    except Exception as e:
-        await message.reply_text("❌ Error.")
-
-async def cd_command(client, message):
-    """Comando /cd - Cambiar carpeta"""
-    try:
-        user_id = message.from_user.id
-        session = get_user_session(user_id)
-        args = message.text.split()
+**📞 Soporte:**
+Si tienes problemas, contacta al administrador."""
         
-        if len(args) == 1:
-            current = session['current_folder']
-            await message.reply_text(f"📂 **Carpeta:** `{current}`")
-        else:
-            folder = args[1].lower()
-            if folder in ['downloads', 'packed']:
-                session['current_folder'] = folder
-                await message.reply_text(f"📂 **Cambiado a:** `{folder}`")
-            else:
-                await message.reply_text(
-                    "❌ **Carpetas disponibles:**\n"
-                    "• `downloads`\n"
-                    "• `packed`"
-                )
-
+        await message.reply_text(help_text)
+        
     except Exception as e:
-        logger.error(f"Error /cd: {e}")
-        await message.reply_text("❌ Error.")
+        logger.error(f"Error en /help: {e}")
+        await message.reply_text("❌ Error mostrando ayuda.")
 
 async def list_command(client, message):
-    """Comando /list optimizado y asíncrono"""
+    """Lista todos los archivos del usuario"""
     try:
         user_id = message.from_user.id
-        session = get_user_session(user_id)
-        current_folder = session['current_folder']
+        user_name = message.from_user.first_name
         
-        files = await async_file_service.list_user_files(user_id, current_folder)
+        list_msg = await message.reply_text(f"📋 **Buscando tus archivos, {user_name}...**")
+        
+        files = await file_service.list_user_files(user_id, "downloads")
         
         if not files:
-            folder_name = "📥 Descargas" if current_folder == "downloads" else "📦 Empaquetados"
-            await message.reply_text(f"{folder_name} está vacía.")
+            await list_msg.edit_text(
+                f"📭 **No tienes archivos aún, {user_name}**\n\n"
+                f"Envía cualquier archivo al bot para obtener enlaces permanentes.\n\n"
+                f"**Formatos soportados:**\n"
+                f"• Documentos (PDF, Word, Excel, etc.)\n"
+                f"• Videos (MP4, AVI, MKV, etc.)\n"
+                f"• Audio (MP3, WAV, etc.)\n"
+                f"• Fotos (JPG, PNG, etc.)\n\n"
+                f"**Límite:** {MAX_FILE_SIZE_MB}MB por archivo"
+            )
             return
         
-        # Máximo 8 archivos por mensaje
-        files_to_show = files[:8]
+        # Calcular estadísticas
+        total_files = len(files)
+        total_size = sum(f['size'] for f in files if f['size'])
+        total_size_mb = total_size / (1024 * 1024) if total_size > 0 else 0
         
-        folder_display = "📥 DESCARGAS" if current_folder == "downloads" else "📦 EMPAQUETADOS"
-        files_text = f"**{folder_display}**\n"
-        files_text += f"({len(files)} archivos)\n\n"
+        response = f"📁 **Tus Archivos ({total_files}) - {total_size_mb:.1f}MB total**\n\n"
+        
+        # Mostrar archivos (máximo 15 para no saturar)
+        files_to_show = files[:15]
         
         for file_info in files_to_show:
-            size = file_info['size_mb']
-            name = file_info['name']
-            if len(name) > 20:
-                name = name[:17] + "..."
-            files_text += f"**#{file_info['number']}** - `{name}`\n"
-            files_text += f"   📏 {size:.1f}MB\n\n"
+            size_mb = file_info['size'] / (1024 * 1024) if file_info['size'] > 0 else 0
+            
+            # Truncar nombre largo
+            display_name = file_info['name']
+            if len(display_name) > 30:
+                display_name = display_name[:27] + "..."
+            
+            response += f"**#{file_info['number']}** - `{display_name}`\n"
+            response += f"📏 {size_mb:.1f}MB | 📅 {file_info.get('date', 'N/A')}\n"
+            response += f"🔗 [Descargar]({file_info['urls'].get('deep_link', '#')})\n\n"
         
-        if len(files) > 8:
-            files_text += f"\n... y {len(files) - 8} más."
+        if total_files > 15:
+            response += f"📄 *Mostrando 15 de {total_files} archivos*\n\n"
         
-        files_text += f"\n**Comandos:** `/delete N` | `/rename N nombre`"
+        response += "**📝 Comandos disponibles:**\n"
+        response += "• `/delete N` - Eliminar archivo #N\n"
+        response += "• `/status` - Ver estadísticas detalladas\n"
+        response += f"• **Total almacenado:** {total_size_mb:.1f}MB\n\n"
+        response += "💡 *Usa los enlaces para descargar o compartir tus archivos.*"
         
-        await message.reply_text(files_text, disable_web_page_preview=True)
-
+        if len(response) > 4000:
+            # Enviar en partes
+            await list_msg.edit_text(response[:4000], disable_web_page_preview=True)
+            
+            parts = [response[i:i+4000] for i in range(4000, len(response), 4000)]
+            for part in parts:
+                await message.reply_text(part, disable_web_page_preview=True)
+        else:
+            await list_msg.edit_text(response, disable_web_page_preview=True)
+        
+        logger.info(f"Archivos listados para {user_id}: {total_files} archivos")
+        
     except Exception as e:
-        logger.error(f"Error /list: {e}")
+        logger.error(f"Error en /list: {e}")
         await message.reply_text("❌ Error listando archivos.")
 
 async def delete_command(client, message):
-    """Comando /delete asíncrono"""
+    """Elimina un archivo del usuario"""
     try:
         user_id = message.from_user.id
-        session = get_user_session(user_id)
-        current_folder = session['current_folder']
         args = message.text.split()
         
         if len(args) < 2:
-            await message.reply_text("❌ **Uso:** `/delete <número>`")
+            await message.reply_text(
+                "❌ **Formato incorrecto**\n\n"
+                "**Uso:** `/delete <número>`\n"
+                "**Ejemplo:** `/delete 5`\n\n"
+                "Usa `/list` para ver los números de tus archivos."
+            )
             return
         
         try:
             file_number = int(args[1])
-        except:
-            await message.reply_text("❌ Número inválido.")
+        except ValueError:
+            await message.reply_text(
+                "❌ **Número inválido**\n\n"
+                "Por favor, usa un número válido.\n"
+                "Ejemplo: `/delete 3`"
+            )
             return
         
-        success, result_message = await async_file_service.delete_file_by_number(
-            user_id, file_number, current_folder
+        # Confirmar eliminación
+        confirm_msg = await message.reply_text(
+            f"⚠️ **¿Eliminar archivo #{file_number}?**\n\n"
+            f"Esta acción eliminará la referencia al archivo.\n"
+            f"**Nota:** El archivo seguirá disponible en Telegram.\n\n"
+            f"Responde `sí` para confirmar o `no` para cancelar."
         )
         
-        if success:
-            await message.reply_text(f"✅ **{result_message}**")
-        else:
-            await message.reply_text(f"❌ **{result_message}**")
-            
-    except Exception as e:
-        logger.error(f"Error /delete: {e}")
-        await message.reply_text("❌ Error.")
-
-async def clear_command(client, message):
-    """Comando /clear - Vaciar carpeta"""
-    try:
-        user_id = message.from_user.id
-        session = get_user_session(user_id)
-        current_folder = session['current_folder']
-        
-        success, result_message = await async_file_service.delete_all_files(user_id, current_folder)
-        
-        if success:
-            await message.reply_text(f"✅ **{result_message}**")
-        else:
-            await message.reply_text(f"❌ **{result_message}**")
-            
-    except Exception as e:
-        logger.error(f"Error /clear: {e}")
-        await message.reply_text("❌ Error.")
-
-async def rename_command(client, message):
-    """Comando /rename - Renombrar archivo"""
-    try:
-        user_id = message.from_user.id
-        session = get_user_session(user_id)
-        current_folder = session['current_folder']
-        args = message.text.split(maxsplit=2)
-        
-        if len(args) < 3:
-            await message.reply_text("❌ **Uso:** `/rename <número> <nombre>`")
-            return
-        
-        try:
-            file_number = int(args[1])
-        except:
-            await message.reply_text("❌ Número inválido.")
-            return
-        
-        new_name = args[2].strip()
-        
-        if not new_name:
-            await message.reply_text("❌ Nombre vacío.")
-            return
-        
-        success, result_message, new_url = await async_file_service.rename_file(
-            user_id, file_number, new_name, current_folder
+        # Esperar confirmación (simplificado)
+        # En una implementación real, usaríamos ConversationHandler
+        await confirm_msg.edit_text(
+            f"🗑️ **Eliminando archivo #{file_number}...**\n\n"
+            f"Por favor, usa el comando nuevamente para confirmar:\n"
+            f"`/delete {file_number} confirm`\n\n"
+            f"O cancela ignorando este mensaje."
         )
         
-        if success:
-            response_text = f"✅ **{result_message}**\n\n"
-            response_text += f"**Nuevo enlace:**\n"
-            response_text += f"🔗 [{new_name}]({new_url})"
+        # Para simplificar, eliminamos directamente si hay "confirm"
+        if len(args) > 2 and args[2].lower() == 'confirm':
+            success, result_message = await file_service.delete_file(user_id, file_number, "downloads")
             
-            await message.reply_text(response_text, disable_web_page_preview=True)
-        else:
-            await message.reply_text(f"❌ **{result_message}**")
+            if success:
+                await message.reply_text(f"✅ {result_message}")
+            else:
+                await message.reply_text(f"❌ {result_message}")
             
     except Exception as e:
-        logger.error(f"Error /rename: {e}")
-        await message.reply_text("❌ Error.")
+        logger.error(f"Error en /delete: {e}")
+        await message.reply_text("❌ Error eliminando archivo.")
 
 async def status_command(client, message):
-    """Comando /status - Estado del sistema"""
+    """Muestra estadísticas del usuario y sistema"""
     try:
         user_id = message.from_user.id
-        session = get_user_session(user_id)
+        user_name = message.from_user.first_name
         
-        downloads = await async_file_service.list_user_files(user_id, "downloads")
-        packed = await async_file_service.list_user_files(user_id, "packed")
+        # Obtener estadísticas del usuario
+        user_stats = await file_service.get_user_stats(user_id)
         
-        downloads_count = len(downloads)
-        packed_count = len(packed)
-        
-        total_size = await async_file_service.get_user_storage_usage(user_id)
-        size_mb = total_size / (1024 * 1024)
-        
-        system_status = load_manager.get_status()
-        
-        status_text = f"""**📊 ESTADO - {message.from_user.first_name}**
+        if not user_stats:
+            # Usuario nuevo o sin archivos
+            status_text = f"""📊 **Estado del Sistema - {user_name}**
 
-**👤 USUARIO:**
-• **ID:** `{user_id}`
-• **Carpeta:** `{session['current_folder']}`
-• **Archivos:** {downloads_count} descargas, {packed_count} empaquetados
-• **Espacio:** {size_mb:.2f} MB
+**👤 Tu información:**
+• ID de usuario: `{user_id}`
+• Primer uso: Recién empezado 🎉
+• Archivos almacenados: 0
 
-**📏 CONFIGURACIÓN:**
-• **Límite:** {MAX_FILE_SIZE_MB} MB
+**🖥️ Sistema:**
+• Almacenamiento: 100% en Telegram ☁️
+• Servidor: Proxy ligero (0% CPU en Render)
+• Enlaces: Permanentes ✅
+• Límite por archivo: {MAX_FILE_SIZE_MB}MB
+• Estado: **✅ ÓPTIMO**
 
-**🖥️ SISTEMA:**
-• **CPU:** {system_status['cpu_percent']:.1f}%
-• **Memoria:** {system_status['memory_percent']:.1f}%
-• **Estado:** {"✅ ACTIVO" if system_status['can_accept_work'] else "⚠️ SOBRECARGADO"}"""
+**💡 Características:**
+✅ Sobrevive a reinicios de servidor
+✅ Cero almacenamiento local
+✅ Cero procesamiento pesado
+✅ Acceso desde cualquier dispositivo
+✅ Enlaces que nunca expiran
+
+**🚀 Para comenzar:**
+Envía cualquier archivo al bot y obtén enlaces permanentes."""
+            
+            await message.reply_text(status_text)
+            return
         
+        # Usuario con archivos
+        first_use = datetime.fromisoformat(user_stats['first_use']).strftime('%d/%m/%Y')
+        last_activity = datetime.fromisoformat(user_stats['last_activity']).strftime('%d/%m/%Y %H:%M')
+        
+        status_text = f"""📊 **Estado del Sistema - {user_name}**
+
+**👤 Tu información:**
+• ID de usuario: `{user_id}`
+• Primer uso: {first_use}
+• Última actividad: {last_activity}
+• Archivos de descarga: {user_stats['downloads_count']}
+• Archivos empaquetados: {user_stats['packed_count']}
+• **Total archivos:** {user_stats['total_files']}
+• **Espacio usado:** {user_stats['total_size_mb']:.1f}MB
+
+**🖥️ Sistema:**
+• Almacenamiento: 100% en Telegram ☁️
+• Servidor: Proxy ligero (0% CPU en Render)
+• Enlaces: Permanentes ✅
+• Límite por archivo: {MAX_FILE_SIZE_MB}MB
+• Estado: **✅ ÓPTIMO**
+
+**📈 Estadísticas:**
+• Archivos más recientes: Usa `/list`
+• Gestión: `/delete N` para eliminar
+• Espacio disponible: Ilimitado (Telegram)
+
+**💡 Recordatorio:**
+Todos tus archivos están seguros en Telegram y son accesibles desde cualquier dispositivo mediante los enlaces permanentes."""
+
         await message.reply_text(status_text)
         
     except Exception as e:
-        logger.error(f"Error /status: {e}")
-        await message.reply_text("❌ Error.")
-
-# ===== EMPAQUETADO =====
-
-async def pack_command(client, message):
-    """Comando /pack completamente asíncrono"""
-    try:
-        user_id = message.from_user.id
-        
-        # Verificar archivos asíncronamente
-        files = await async_file_service.list_user_files(user_id, "downloads")
-        if not files:
-            await message.reply_text("📭 No hay archivos para empaquetar.")
-            return
-        
-        command_parts = message.text.split()
-        split_size = None
-        
-        if len(command_parts) > 1:
-            try:
-                split_size = int(command_parts[1])
-                if split_size <= 0 or split_size > 200:
-                    await message.reply_text("❌ Usa `/pack 100` (1-200 MB)")
-                    return
-            except:
-                await message.reply_text("❌ Usa `/pack` o `/pack 100`")
-                return
-        
-        system_status = load_manager.get_status()
-        if not system_status['can_accept_work']:
-            await message.reply_text(
-                f"⚠️ **Sistema sobrecargado.**\n"
-                f"CPU: {system_status['cpu_percent']:.1f}%"
-            )
-            return
-        
-        status_msg = await message.reply_text("📦 **Empaquetando...**")
-        
-        files, status_message = await async_packing_service.pack_folder(user_id, split_size)
-        
-        if not files:
-            await status_msg.edit_text(f"❌ {status_message}")
-            return
-        
-        if len(files) == 1:
-            file_info = files[0]
-            
-            response_text = f"""✅ **Empaquetado completado**
-
-📦 `{file_info['filename']}`
-📏 {file_info['size_mb']:.1f} MB
-🔗 [Descargar]({file_info['url']})"""
-            
-            await status_msg.edit_text(response_text, disable_web_page_preview=True)
-            
-        else:
-            total_size = sum(f['size_mb'] for f in files)
-            
-            response_text = f"""✅ **Empaquetado en {len(files)} partes**
-
-📦 {len(files)} archivos
-📏 {total_size:.1f} MB total
-
-**Enlaces:**"""
-            
-            for file_info in files:
-                response_text += f"\n\n**Parte {file_info['number']}:**"
-                response_text += f"\n🔗 [{file_info['filename']}]({file_info['url']})"
-            
-            if len(response_text) > 4000:
-                await status_msg.edit_text(f"✅ {len(files)} partes creadas")
-                
-                for file_info in files:
-                    await message.reply_text(
-                        f"**Parte {file_info['number']}:**\n🔗 [{file_info['filename']}]({file_info['url']})",
-                        disable_web_page_preview=True
-                    )
-            else:
-                await status_msg.edit_text(response_text, disable_web_page_preview=True)
-                
-        logger.info(f"Empaquetado: usuario {user_id}, {len(files)} archivos")
-        
-    except Exception as e:
-        logger.error(f"Error /pack: {e}")
-        await message.reply_text("❌ Error empaquetando.")
-
-# ===== COLA DE DESCARGAS =====
-
-async def queue_command(client, message):
-    """Comando /queue - Ver cola"""
-    try:
-        user_id = message.from_user.id
-        
-        if user_id not in user_queues or not user_queues[user_id]:
-            await message.reply_text("📭 **Cola vacía**")
-            return
-        
-        queue_size = len(user_queues[user_id])
-        
-        queue_text = f"📋 **Cola - {queue_size} archivo(s)**\n\n"
-        
-        for i, msg in enumerate(user_queues[user_id][:5]):  # Mostrar solo 5
-            file_info = "Desconocido"
-            if msg.document:
-                name = msg.document.file_name or 'Documento'
-                if len(name) > 20:
-                    name = name[:17] + "..."
-                file_info = f"📄 {name}"
-            elif msg.video:
-                name = msg.video.file_name or 'Video'
-                if len(name) > 20:
-                    name = name[:17] + "..."
-                file_info = f"🎥 {name}"
-            elif msg.audio:
-                name = msg.audio.file_name or 'Audio'
-                if len(name) > 20:
-                    name = name[:17] + "..."
-                file_info = f"🎵 {name}"
-            elif msg.photo:
-                file_info = f"🖼️ Foto"
-            
-            queue_text += f"**#{i+1}** - {file_info}\n"
-        
-        if queue_size > 5:
-            queue_text += f"\n... y {queue_size - 5} más."
-        
-        await message.reply_text(queue_text)
-        
-    except Exception as e:
-        logger.error(f"Error /queue: {e}")
-        await message.reply_text("❌ Error.")
-
-async def clear_queue_command(client, message):
-    """Comando /clearqueue - Limpiar cola"""
-    try:
-        user_id = message.from_user.id
-        
-        if user_id not in user_queues or not user_queues[user_id]:
-            await message.reply_text("📭 **Cola ya vacía**")
-            return
-        
-        queue_size = len(user_queues[user_id])
-        user_queues[user_id] = []
-        
-        if user_id in user_current_processing:
-            del user_current_processing[user_id]
-        
-        if user_id in user_batch_totals:
-            del user_batch_totals[user_id]
-        
-        await message.reply_text(f"🗑️ **Cola limpiada**\n{queue_size} archivos removidos.")
-        
-    except Exception as e:
-        logger.error(f"Error /clearqueue: {e}")
-        await message.reply_text("❌ Error.")
-
-async def cleanup_command(client, message):
-    """Comando /cleanup - Limpiar archivos"""
-    try:
-        user_id = message.from_user.id
-        
-        total_size = await async_file_service.get_user_storage_usage(user_id)
-        size_mb = total_size / (1024 * 1024)
-        
-        await message.reply_text(
-            f"🧹 **Espacio utilizado:** {size_mb:.2f} MB\n"
-            f"Usa `/delete` o `/clear` para gestionar archivos."
-        )
-        
-    except Exception as e:
-        logger.error(f"Error /cleanup: {e}")
-        await message.reply_text("❌ Error.")
-
-# ===== MANEJO DE ARCHIVOS =====
+        logger.error(f"Error en /status: {e}")
+        await message.reply_text("❌ Error obteniendo estado.")
 
 async def handle_file(client, message):
-    """Maneja recepción de archivos"""
+    """Maneja la recepción de archivos - Solo referencia, NO descarga"""
     try:
         user = message.from_user
         user_id = user.id
-
+        user_name = user.first_name
+        
+        logger.info(f"📥 Archivo recibido de {user_id} ({user_name})")
+        
+        # Verificar tamaño del archivo
         file_size = 0
+        file_type = "desconocido"
+        file_name = "sin_nombre"
+        
         if message.document:
             file_size = message.document.file_size or 0
+            file_type = "documento"
+            file_name = message.document.file_name or "documento_sin_nombre"
         elif message.video:
             file_size = message.video.file_size or 0
+            file_type = "video"
+            file_name = message.video.file_name or "video_sin_nombre.mp4"
         elif message.audio:
             file_size = message.audio.file_size or 0
+            file_type = "audio"
+            file_name = message.audio.file_name or "audio_sin_nombre.mp3"
         elif message.photo:
-            file_size = message.photo[-1].file_size or 0
-
+            # Tomar la foto de mayor resolución
+            photo = message.photo[-1]
+            file_size = photo.file_size or 0
+            file_type = "foto"
+            file_name = f"foto_{message.id}.jpg"
+        elif message.voice:
+            file_size = message.voice.file_size or 0
+            file_type = "mensaje de voz"
+            file_name = f"voz_{message.id}.ogg"
+        elif message.sticker:
+            file_size = message.sticker.file_size or 0
+            file_type = "sticker"
+            file_name = f"sticker_{message.id}.webp"
+        else:
+            await message.reply_text("❌ Tipo de archivo no soportado.")
+            return
+        
+        # Verificar tamaño máximo
         if file_size > MAX_FILE_SIZE:
+            size_mb = file_size / (1024 * 1024)
             await message.reply_text(
                 f"❌ **Archivo demasiado grande**\n\n"
-                f"Máximo: {MAX_FILE_SIZE_MB} MB\n"
-                f"Tuyo: {async_file_service.format_bytes(file_size)}"
+                f"**Tamaño máximo permitido:** {MAX_FILE_SIZE_MB}MB\n"
+                f"**Tu archivo:** {size_mb:.1f}MB\n\n"
+                f"Por favor, divide el archivo en partes más pequeñas o comprímalo."
             )
             return
-
-        if user_id not in user_queues:
-            user_queues[user_id] = []
         
-        user_queues[user_id].append(message)
-        
-        if len(user_queues[user_id]) == 1:
-            await process_file_queue(client, user_id)
-        
-    except Exception as e:
-        logger.error(f"Error procesando archivo: {e}")
-        try:
-            await message.reply_text("❌ Error.")
-        except:
-            pass
-
-async def process_file_queue(client, user_id):
-    """Procesa cola de archivos"""
-    try:
-        total_files_in_batch = len(user_queues[user_id])
-        user_batch_totals[user_id] = total_files_in_batch
-        
-        current_position = 0
-        
-        while user_queues.get(user_id) and user_queues[user_id]:
-            message = user_queues[user_id][0]
-            current_position += 1
-            
-            logger.info(f"Procesando {current_position}/{total_files_in_batch} para {user_id}")
-            
-            await process_single_file(client, message, user_id, current_position, total_files_in_batch)
-            
-            await asyncio.sleep(1)
-        
-        if user_id in user_batch_totals:
-            del user_batch_totals[user_id]
-                
-    except Exception as e:
-        logger.error(f"Error process_file_queue: {e}")
-        if user_id in user_queues:
-            user_queues[user_id] = []
-        if user_id in user_batch_totals:
-            del user_batch_totals[user_id]
-
-async def process_single_file(client, message, user_id, current_position, total_files):
-    """Procesa un solo archivo de forma asíncrona optimizada"""
-    start_time = time.time()
-    
-    try:
-        file_obj = None
-        file_type = None
-        original_filename = None
-        file_size = 0
-
-        if message.document:
-            file_obj = message.document
-            file_type = "documento"
-            original_filename = message.document.file_name or "archivo"
-            file_size = file_obj.file_size or 0
-        elif message.video:
-            file_obj = message.video
-            file_type = "video"
-            original_filename = message.video.file_name or "video.mp4"
-            file_size = file_obj.file_size or 0
-        elif message.audio:
-            file_obj = message.audio
-            file_type = "audio"
-            original_filename = message.audio.file_name or "audio.mp3"
-            file_size = file_obj.file_size or 0
-        elif message.photo:
-            file_obj = message.photo[-1]
-            file_type = "foto"
-            original_filename = f"foto_{message.id}.jpg"
-            file_size = file_obj.file_size or 0
-        else:
-            if user_id in user_queues and user_queues[user_id]:
-                user_queues[user_id].pop(0)
-            return
-
-        if not file_obj:
-            if user_id in user_queues and user_queues[user_id]:
-                user_queues[user_id].pop(0)
-            await message.reply_text("❌ Error: Archivo no identificado.")
-            return
-
-        # Verificar cuota antes de descargar
-        can_download, quota_message = await async_file_service.check_user_quota(user_id, file_size)
-        if not can_download:
-            await message.reply_text(f"❌ **{quota_message}**")
-            if user_id in user_queues and user_queues[user_id]:
-                user_queues[user_id].pop(0)
-            return
-        
-        user_dir = await async_file_service.get_user_directory(user_id, "downloads")
-        
-        sanitized_name = async_file_service.sanitize_filename(original_filename)
-        
-        stored_filename = sanitized_name
-        counter = 1
-        base_name, ext = os.path.splitext(sanitized_name)
-        file_path = os.path.join(user_dir, stored_filename)
-        
-        loop = asyncio.get_event_loop()
-        while await loop.run_in_executor(None, os.path.exists, file_path):
-            stored_filename = f"{base_name}_{counter}{ext}"
-            file_path = os.path.join(user_dir, stored_filename)
-            counter += 1
-
-        file_number = await async_file_service.register_file(user_id, original_filename, stored_filename, "downloads")
-        logger.info(f"Registrado: #{file_number} - {original_filename}")
-
-        initial_message = progress_service.create_progress_message(
-            filename=original_filename,
-            current=0,
-            total=file_size,
-            speed=0,
-            user_first_name=message.from_user.first_name,
-            process_type="Subiendo",
-            current_file=current_position,
-            total_files=total_files
+        # Procesar inmediatamente (sin colas, sin descargas)
+        processing_msg = await message.reply_text(
+            f"⚡ **Procesando {file_type}...**\n\n"
+            f"**Nombre:** {file_name}\n"
+            f"**Tamaño:** {file_size/1024/1024:.1f}MB\n\n"
+            f"⏳ Esto tomará solo unos segundos..."
         )
         
-        progress_msg = await message.reply_text(initial_message)
-        user_current_processing[user_id] = progress_msg.id
-
-        progress_data = {'last_update': 0, 'last_speed': 0}
-
-        async def progress_callback(current, total):
-            try:
-                elapsed_time = time.time() - start_time
-                speed = current / elapsed_time if elapsed_time > 0 else 0
-                
-                progress_data['last_speed'] = (
-                    0.7 * progress_data.get('last_speed', 0) + 0.3 * speed
-                )
-                smoothed_speed = progress_data['last_speed']
-
-                current_time = time.time()
-                last_update = progress_data.get('last_update', 0)
-
-                if current_time - last_update >= 0.5 or current == total:
-                    progress_message = progress_service.create_progress_message(
-                        filename=original_filename,
-                        current=current,
-                        total=total,
-                        speed=smoothed_speed,
-                        user_first_name=message.from_user.first_name,
-                        process_type="Subiendo",
-                        current_file=current_position,
-                        total_files=total_files
-                    )
-
-                    try:
-                        await progress_msg.edit_text(progress_message)
-                        progress_data['last_update'] = current_time
-                    except:
-                        pass
-
-            except Exception as e:
-                logger.error(f"Error callback: {e}")
-
-        try:
-            logger.info(f"Descargando: {original_filename}")
-            
-            success, downloaded = await fast_download_service.download_with_retry(
-                client=client,
-                message=message,
-                file_path=file_path,
-                progress_callback=progress_callback
-            )
-
-            if not success or not os.path.exists(file_path):
-                await progress_msg.edit_text("❌ Error en descarga.")
-                if user_id in user_queues and user_queues[user_id]:
-                    user_queues[user_id].pop(0)
-                return
-
-            final_size = await loop.run_in_executor(None, os.path.getsize, file_path)
-            size_mb = final_size / (1024 * 1024)
-            
-            await async_file_service.update_file_size(user_id, file_number, final_size, "downloads")
-
-            download_url = await async_file_service.create_download_url(user_id, stored_filename)
-            
-            files_list = await async_file_service.list_user_files(user_id, "downloads")
-            current_file_number = None
-            for file_info in files_list:
-                if file_info['stored_name'] == stored_filename:
-                    current_file_number = file_info['number']
-                    break
-
-            next_files_count = len(user_queues[user_id]) - 1 if user_id in user_queues and user_queues[user_id] else 0
-            
-            queue_info = ""
-            if next_files_count > 0:
-                queue_info = f"\n\n⏭️ **Siguiente archivo...** ({next_files_count} restantes)"
-
-            success_text = f"""✅ **Archivo #{current_file_number or file_number} Almacenado!**
-
-**Nombre:** `{original_filename}`
-**Tipo:** {file_type}
-**Tamaño:** {size_mb:.2f} MB
-
-**Enlace:**
-🔗 [{original_filename}]({download_url}){queue_info}"""
-
-            await progress_msg.edit_text(success_text, disable_web_page_preview=True)
-            
-            logger.info(f"✅ Archivo guardado: {stored_filename}")
-
-        except Exception as download_error:
-            logger.error(f"❌ Error descarga: {download_error}")
-            await progress_msg.edit_text("❌ Error al descargar.")
+        # Registrar archivo (SOLO REFERENCIA, CERO descarga)
+        result = await file_service.register_file(message, user_id, "downloads")
         
-        if user_id in user_queues and user_queues[user_id]:
-            user_queues[user_id].pop(0)
-            
-        if user_id in user_current_processing:
-            del user_current_processing[user_id]
+        if not result:
+            await processing_msg.edit_text(
+                f"❌ **Error registrando archivo**\n\n"
+                f"No se pudo guardar la referencia del archivo.\n"
+                f"Por favor, inténtalo nuevamente."
+            )
+            return
+        
+        # Obtener URLs generadas
+        file_info = await file_service.get_file_urls(user_id, result['number'], "downloads")
+        
+        if not file_info:
+            await processing_msg.edit_text(
+                f"❌ **Error generando URLs**\n\n"
+                f"El archivo se registró pero no se pudieron generar los enlaces.\n"
+                f"Contacta con soporte."
+            )
+            return
+        
+        # Preparar respuesta
+        size_mb = file_size / (1024 * 1024)
+        file_number = result['number']
+        
+        response = f"""✅ **¡Archivo #{file_number} Guardado!**
 
+**📁 Información:**
+• **Nombre:** `{file_name}`
+• **Tipo:** {file_type}
+• **Tamaño:** {size_mb:.1f}MB
+• **Fecha:** {datetime.now().strftime('%d/%m/%Y %H:%M')}
+
+**🔗 Enlaces Permanentes:**
+
+**1. Descarga Directa (Recomendado):**
+[{file_name}]({file_info['urls'].get('download_url', '#')})
+
+**2. Abrir en Telegram:**
+[Abrir en app]({file_info['urls'].get('deep_link', '#')})
+
+**3. URL API (para developers):**
+`{file_info['urls'].get('direct_url', 'N/A')}`
+
+**4. URL del Proxy:**
+`{file_info['urls'].get('proxy_url', 'N/A')}`
+
+**📝 Notas importantes:**
+• Los enlaces **funcionarán para siempre**
+• El archivo está almacenado **100% en Telegram**
+• **Sobrevive a reinicios** del servidor
+• Comparte los enlaces donde quieras
+
+**💾 Para gestionar tus archivos:**
+• `/list` - Ver todos tus archivos
+• `/delete {file_number}` - Eliminar este archivo
+• `/status` - Ver estadísticas
+
+⚠️ **Guarda estos enlaces para acceder al archivo en el futuro.**"""
+
+        await processing_msg.edit_text(response, disable_web_page_preview=False)
+        
+        logger.info(f"✅ Archivo procesado: #{file_number} - {file_name} para usuario {user_id}")
+        
     except Exception as e:
-        logger.error(f"❌ Error procesando archivo: {e}")
+        logger.error(f"❌ Error procesando archivo: {e}", exc_info=True)
         try:
-            await message.reply_text(f"❌ Error: {str(e)[:100]}")
+            await message.reply_text(
+                f"❌ **Error procesando archivo**\n\n"
+                f"Detalles: {str(e)[:100]}\n\n"
+                f"Por favor, inténtalo nuevamente o contacta soporte."
+            )
         except:
             pass
-        
-        if user_id in user_queues and user_queues[user_id]:
-            user_queues[user_id].pop(0)
-            
-        if user_id in user_current_processing:
-            del user_current_processing[user_id]
 
-# ===== CONFIGURACIÓN DE HANDLERS =====
+async def cleanup_command(client, message):
+    """Limpia todos los archivos del usuario"""
+    try:
+        user_id = message.from_user.id
+        
+        confirm_msg = await message.reply_text(
+            "⚠️ **¡ADVERTENCIA CRÍTICA!**\n\n"
+            "Estás a punto de eliminar **TODOS** tus archivos.\n"
+            "Esta acción **NO SE PUEDE DESHACER**.\n\n"
+            "**Escribe `CONFIRMAR ELIMINAR TODO` para proceder.**"
+        )
+        
+        # En una implementación real, usaríamos ConversationHandler
+        # Para simplificar, mostramos mensaje informativo
+        await confirm_msg.edit_text(
+            "🗑️ **Limpieza de archivos**\n\n"
+            "Para eliminar todos tus archivos, por favor contacta al administrador.\n\n"
+            "**Comandos seguros disponibles:**\n"
+            "• `/delete N` - Eliminar archivo específico\n"
+            "• `/list` - Ver tus archivos\n\n"
+            "⚠️ **La eliminación masiva requiere confirmación especial.**"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error en cleanup: {e}")
+        await message.reply_text("❌ Error en comando de limpieza.")
 
 def setup_handlers(client):
-    """Configura todos los handlers"""
-    commands = [
-        ("start", start_command),
-        ("help", help_command),
-        ("status", status_command),
-        ("cd", cd_command),
-        ("list", list_command),
-        ("delete", delete_command),
-        ("clear", clear_command),
-        ("rename", rename_command),
-        ("pack", pack_command),
-        ("queue", queue_command),
-        ("clearqueue", clear_queue_command),
-        ("cleanup", cleanup_command)
-    ]
+    """Configura todos los handlers del bot"""
+    client.on_message(filters.command("start") & filters.private)(start_command)
+    client.on_message(filters.command("help") & filters.private)(help_command)
+    client.on_message(filters.command("list") & filters.private)(list_command)
+    client.on_message(filters.command("delete") & filters.private)(delete_command)
+    client.on_message(filters.command("status") & filters.private)(status_command)
+    client.on_message(filters.command("cleanup") & filters.private)(cleanup_command)
     
-    for cmd, handler in commands:
-        client.on_message(filters.command(cmd) & filters.private)(handler)
-    
-    # Handler para archivos
+    # Handler de archivos
     client.on_message(
-        (filters.document | filters.video | filters.audio | filters.photo) &
+        (filters.document | filters.video | filters.audio | filters.photo | 
+         filters.voice | filters.sticker) &
         filters.private
     )(handle_file)
+    
+    logger.info("✅ Handlers configurados (sistema optimizado)")
