@@ -1,31 +1,21 @@
 import os
-from datetime import timedelta
 
-# Configuración principal
-API_ID = int(os.getenv("API_ID", "12345678"))
-API_HASH = os.getenv("API_HASH", "")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-RENDER_DOMAIN = os.getenv("RENDER_DOMAIN", "https://file2link-test.onrender.com")
-BASE_DIR = "storage"
+# ===== CONFIGURACIÓN BÁSICA =====
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+RENDER_DOMAIN = os.getenv("RENDER_DOMAIN")
 PORT = int(os.getenv("PORT", 8080))
-SECRET_KEY = os.getenv("SECRET_KEY", os.urandom(24).hex())
 
-# Límites
-MAX_USER_STORAGE_MB = 5000
-MAX_FILES_PER_USER = 100
-DOWNLOAD_LINK_EXPIRY_HOURS = 24
+# ===== GRUPOS DE TELEGRAM =====
+DB_CHANNEL_ID = os.getenv("DB_CHANNEL_ID")  # Grupo para metadatos
+STORAGE_CHANNEL_ID = os.getenv("STORAGE_CHANNEL_ID")  # Grupo para archivos
+BOT_USERNAME = os.getenv("BOT_USERNAME", "tu_bot_username")  # @username del bot
 
-# Configuración optimizada
-MAX_PART_SIZE_MB = 100
-MAX_CONCURRENT_PROCESSES = 2
-CPU_USAGE_LIMIT = 75
-
-# Tamaños de archivo
+# ===== LÍMITES =====
 MAX_FILE_SIZE_MB = 2000
 MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024
+MAX_CONCURRENT_PROCESSES = 1
 
-# Configuración de descarga
-DOWNLOAD_BUFFER_SIZE = 65536
-DOWNLOAD_TIMEOUT = 3600
-MAX_RETRIES = 3
-CHUNK_SIZE = 32768
+# ===== URLs =====
+TELEGRAM_API_URL = "https://api.telegram.org"
