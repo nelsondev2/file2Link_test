@@ -1,11 +1,13 @@
 import logging
-from file_service import async_file_service
+import sys
+import time
+from file_service import file_service
 
 logger = logging.getLogger(__name__)
 
 class ProgressService:
     def create_progress_bar(self, current, total, bar_length=15):
-        """Crea una barra de progreso visual"""
+        """Crea una barra de progreso visual en una sola línea"""
         if total == 0:
             return "[░░░░░░░░░░░░░░░] 0.0%"
         
@@ -33,7 +35,7 @@ class ProgressService:
             return f"{hours}h {minutes}m"
 
     def format_speed(self, speed_bytes):
-        """Formatea la velocidad de descarga"""
+        """Formatea la velocidad de descarga de forma legible"""
         if speed_bytes <= 0:
             return "0.0 B/s"
         
@@ -49,17 +51,18 @@ class ProgressService:
         return f"{speed_gb:.2f} GB/s"
 
     def create_progress_message(self, filename, current, total, speed=0, user_first_name=None, process_type="Subiendo", current_file=1, total_files=1):
-        """Crea el mensaje de progreso con ETA"""
+        """Crea el mensaje de progreso con ETA, nombre y posición en cola CORREGIDO"""
         if len(filename) > 25:
             display_name = filename[:22] + "..."
         else:
             display_name = filename
         
         progress_bar = self.create_progress_bar(current, total)
-        processed = async_file_service.format_bytes(current)
-        total_size = async_file_service.format_bytes(total)
+        processed = file_service.format_bytes(current)
+        total_size = file_service.format_bytes(total)
         speed_str = self.format_speed(speed)
         
+        # Calcular ETA
         eta = self.calculate_eta(current, total, speed)
 
         message = f"**📁 {process_type}:** `{display_name}`\n"
