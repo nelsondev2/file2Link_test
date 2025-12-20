@@ -8,8 +8,8 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 
 from config import MAX_FILE_SIZE, MAX_FILE_SIZE_MB, BOT_USERNAME, BOT_TOKEN
-# Importar file_service global
-from file_service import file_service
+# Importar file_service global con alias para evitar conflictos
+from file_service import file_service as global_file_service
 
 logger = logging.getLogger(__name__)
 
@@ -93,22 +93,20 @@ async def handle_file(client, message):
             f"**Tamaño:** {file_size/1024/1024:.1f}MB"
         )
         
-        # ¡IMPORTANTE! Usar file_service global
-        global file_service
-        
-        if file_service is None:
+        # ¡IMPORTANTE! Usar global_file_service
+        if global_file_service is None:
             await processing_msg.edit_text("❌ Error: Servicio no disponible")
             return
         
         # Registrar archivo
-        result = await file_service.register_file(message, user_id, "downloads")
+        result = await global_file_service.register_file(message, user_id, "downloads")
         
         if not result:
             await processing_msg.edit_text("❌ Error registrando archivo")
             return
         
         # Obtener URLs
-        file_info = await file_service.get_file_urls(user_id, result['number'], "downloads")
+        file_info = await global_file_service.get_file_urls(user_id, result['number'], "downloads")
         
         if not file_info:
             await processing_msg.edit_text("❌ Error generando URLs")
@@ -153,14 +151,12 @@ async def list_command(client, message):
         
         list_msg = await message.reply_text("📋 **Buscando tus archivos...**")
         
-        # Usar file_service global
-        global file_service
-        
-        if file_service is None:
+        # Usar global_file_service
+        if global_file_service is None:
             await list_msg.edit_text("❌ Servicio no disponible")
             return
         
-        files = await file_service.list_user_files(user_id, "downloads")
+        files = await global_file_service.list_user_files(user_id, "downloads")
         
         if not files:
             await list_msg.edit_text(
@@ -201,14 +197,12 @@ async def delete_command(client, message):
         file_number = int(args[1])
         user_id = message.from_user.id
         
-        # Usar file_service global
-        global file_service
-        
-        if file_service is None:
+        # Usar global_file_service
+        if global_file_service is None:
             await message.reply_text("❌ Servicio no disponible")
             return
         
-        success, msg = await file_service.delete_file(user_id, file_number, "downloads")
+        success, msg = await global_file_service.delete_file(user_id, file_number, "downloads")
         
         await message.reply_text(msg)
             
@@ -221,12 +215,10 @@ async def status_command(client, message):
     try:
         user_id = message.from_user.id
         
-        # Usar file_service global
-        global file_service
-        
+        # Usar global_file_service
         files = []
-        if file_service:
-            files = await file_service.list_user_files(user_id, "downloads")
+        if global_file_service:
+            files = await global_file_service.list_user_files(user_id, "downloads")
         
         status_text = f"""📊 **Estado del Sistema**
 
