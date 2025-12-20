@@ -1,7 +1,6 @@
 import asyncio
 import logging
-import sys
-from pyrogram import Client, filters
+from pyrogram import Client
 
 from config import API_ID, API_HASH, BOT_TOKEN
 from telegram_handlers import setup_handlers
@@ -13,42 +12,36 @@ class TelegramBot:
         self.client = None
         self.is_running = False
 
-    async def setup_handlers(self):
-        """Configura todos los handlers del bot (sin callbacks)"""
-        setup_handlers(self.client)
-
     async def start_bot(self):
-        """Inicia el bot de Telegram"""
+        """Inicia el bot de Telegram de forma asíncrona pura"""
         try:
             self.client = Client(
                 "file_to_link_bot",
                 api_id=API_ID,
                 api_hash=API_HASH,
-                bot_token=BOT_TOKEN
+                bot_token=BOT_TOKEN,
+                workers=100,
+                sleep_threshold=60,
             )
 
-            await self.setup_handlers()
+            setup_handlers(self.client)
             
             logger.info("Iniciando cliente de Telegram...")
             await self.client.start()
 
             bot_info = await self.client.get_me()
-            logger.info(f"Bot iniciado: @{bot_info.username}")
-            
-            logger.info("El bot está listo y respondiendo a comandos")
+            logger.info(f"✅ Bot iniciado: @{bot_info.username}")
+            logger.info("📩 Listo para recibir comandos y archivos")
 
             self.is_running = True
+            
+            # Mantener el bot corriendo
             await asyncio.Event().wait()
 
         except Exception as e:
-            logger.error(f"Error crítico en el bot: {e}")
+            logger.error(f"❌ Error crítico: {e}")
             self.is_running = False
 
-    def run_bot(self):
-        """Ejecuta el bot en un loop asyncio"""
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(self.start_bot())
-        except Exception as e:
-            logger.error(f"Error en el loop del bot: {e}")
+    def run(self):
+        """Punto de entrada para compatibilidad"""
+        asyncio.run(self.start_bot())
