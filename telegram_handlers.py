@@ -364,7 +364,7 @@ async def status_command(client, message):
         await message.reply_text("❌ Error al obtener estado.")
 
 async def pack_command(client, message):
-    """Maneja el comando /pack - Empaquetado COMPLETO como el original"""
+    """Maneja el comando /pack - Empaquetado"""
     try:
         user_id = message.from_user.id
         command_parts = message.text.split()
@@ -386,8 +386,8 @@ async def pack_command(client, message):
                 if split_size <= 0:
                     await message.reply_text("❌ El tamaño de división debe ser mayor a 0 MB")
                     return
-                if split_size > 501:
-                    await message.reply_text("❌ El tamaño máximo por parte es 500 MB")
+                if split_size > 200:
+                    await message.reply_text("❌ El tamaño máximo por parte es 200 MB")
                     return
             except ValueError:
                 await message.reply_text("❌ Formato incorrecto. Usa: `/pack` o `/pack 100`")
@@ -395,19 +395,19 @@ async def pack_command(client, message):
         
         status_msg = await message.reply_text(
             "📦 **Iniciando empaquetado...**\n\n"
-            f"{'Dividiendo en partes...' if split_size else 'Creando archivo ZIP...'}"
+            "Uniendo todos tus archivos en un ZIP..."
         )
         
-        def run_advanced_packing():
+        def run_simple_packing():
             try:
                 files, status_message = packing_service.pack_folder(user_id, split_size)
                 return files, status_message
             except Exception as e:
-                logger.error(f"Error en empaquetado optimizado: {e}")
+                logger.error(f"Error en empaquetado: {e}")
                 return None, f"Error al empaquetar: {str(e)}"
         
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(run_advanced_packing)
+            future = executor.submit(run_simple_packing)
             files, status_message = future.result(timeout=300)
         
         if not files:
@@ -436,27 +436,12 @@ async def pack_command(client, message):
         else:
             total_files = 0
             for file_info in files:
-                if 'total_files' in file_info and file_info['total_files'] > 0:
+                if 'total_files' in file_info:
                     total_files = file_info['total_files']
                     break
             
             total_files_info = f" ({total_files} archivos)" if total_files > 0 else ""
             
-            # Buscar archivo de lista de partes (.txt)
-            user_dir = file_service.get_user_directory(user_id, "packed")
-            base_name = None
-            for file_info in files:
-                if '.001' in file_info['filename']:
-                    base_name = file_info['filename'].rsplit('.', 2)[0]
-                    break
-            
-            list_filename = f"{base_name}.txt" if base_name else None
-            list_url = None
-            
-            if list_filename and os.path.exists(os.path.join(user_dir, list_filename)):
-                list_url = file_service.create_packed_url(user_id, list_filename)
-            
-            # CONSTRUIR MENSAJE COMPLETO CON TODOS LOS ENLACES (COMO EL ORIGINAL)
             response_text = f"""✅ **Empaquetado Completado{total_files_info}**
 
 **Archivos Generados:** {len(files)} partes
@@ -464,57 +449,29 @@ async def pack_command(client, message):
 
 **Enlaces de Descarga:**"""
             
-            # Agregar TODOS los enlaces en el mensaje (como el original)
             for file_info in files:
-                response_text += f"\n\n**{file_info['filename']}**\n"
-                response_text += f"🔗 {file_info['url']}"
-            
-            # Agregar enlace al archivo .txt si existe
-            if list_url:
-                response_text += f"\n\n**📑 Lista completa en archivo:**"
-                response_text += f"\n🔗 [{list_filename}]({list_url})"
+                response_text += f"\n\n**Parte {file_info['number']}:** 🔗 [{file_info['filename']}]({file_info['url']})"
             
             response_text += "\n\n**Nota:** Usa `/cd packed` y `/list` para ver tus archivos empaquetados"
             
-            # Manejar mensajes largos (dividir si es necesario)
             if len(response_text) > 4000:
                 await status_msg.edit_text("✅ **Empaquetado completado**\n\nLos enlaces se enviarán en varios mensajes...")
                 
-                # Enviar primero el mensaje con estadísticas
-                stats_msg = f"""✅ **Empaquetado Completado{total_files_info}**
-
-**Archivos Generados:** {len(files)} partes
-**Tamaño Total:** {sum(f['size_mb'] for f in files):.1f} MB"""
-                
-                if list_url:
-                    stats_msg += f"\n\n**📑 Lista completa en archivo:**"
-                    stats_msg += f"\n🔗 [{list_filename}]({list_url})"
-                
-                await message.reply_text(stats_msg, disable_web_page_preview=True)
-                
-                # Enviar enlaces en grupos de 10
-                for i in range(0, len(files), 10):
-                    group = files[i:i+10]
-                    group_text = ""
-                    for file_info in group:
-                        group_text += f"\n\n**{file_info['filename']}**\n"
-                        group_text += f"🔗 {file_info['url']}"
-                    
-                    await message.reply_text(group_text, disable_web_page_preview=True)
-                    
-                await message.reply_text(f"✅ **Total: {len(files)} partes generadas**")
+                for file_info in files:
+                    part_text = f"**Parte {file_info['number']}:** 🔗 [{file_info['filename']}]({file_info['url']})"
+                    await message.reply_text(part_text, disable_web_page_preview=True)
             else:
                 await status_msg.edit_text(
                     response_text, 
                     disable_web_page_preview=True
                 )
                 
-        logger.info(f"Empaquetado optimizado completado para usuario {user_id}: {len(files)} archivos")
+        logger.info(f"Empaquetado completado para usuario {user_id}: {len(files)} archivos")
         
     except concurrent.futures.TimeoutError:
         await status_msg.edit_text("❌ El empaquetado tardó demasiado tiempo. Intenta con menos archivos.")
     except Exception as e:
-        logger.error(f"Error en comando /pack optimizado: {e}")
+        logger.error(f"Error en comando /pack: {e}")
         await message.reply_text("❌ Error en el proceso de empaquetado.")
 
 async def queue_command(client, message):
