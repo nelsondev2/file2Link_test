@@ -7,7 +7,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "tu_bot_token")
 RENDER_DOMAIN = os.getenv("RENDER_DOMAIN", "https://file2link-test.onrender.com")
 PORT = int(os.getenv("PORT", 8080))
 
-# ===== GRUPOS DE TELEGRAM =====
 BOT_USERNAME = os.getenv("BOT_USERNAME", "@test_nelsonfile2linkbot")
 
 # ===== LÍMITES =====
