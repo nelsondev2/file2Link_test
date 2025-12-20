@@ -4,7 +4,7 @@ import time
 import logging
 import aiofiles
 from pyrogram.errors import FloodWait
-from config import DOWNLOAD_BUFFER_SIZE, DOWNLOAD_TIMEOUT, MAX_RETRIES, CHUNK_SIZE
+from config import DOWNLOAD_BUFFER_SIZE, DOWNLOAD_TIMEOUT, MAX_RETRIES
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +13,7 @@ class FastDownloadService:
         self.active_downloads = {}
     
     async def download_file_fast(self, client, message, file_path, progress_callback=None):
-        """Descarga archivos a máxima velocidad con buffer optimizado"""
+        """Descarga optimizada"""
         try:
             user_id = message.from_user.id
             self.active_downloads[user_id] = True
@@ -35,15 +35,11 @@ class FastDownloadService:
                 file_size = file_obj.file_size or 0
             
             if not file_obj:
-                raise ValueError("No se pudo obtener el objeto de archivo")
+                raise ValueError("No se pudo obtener archivo")
             
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
             
-            timeout = DOWNLOAD_TIMEOUT
-            if file_size > 500 * 1024 * 1024:
-                timeout = 7200
-            
-            logger.info(f"Iniciando descarga rápida: {os.path.basename(file_path)} ({file_size/1024/1024:.1f} MB)")
+            logger.info(f"Descargando: {os.path.basename(file_path)} ({file_size/1024/1024:.1f} MB)")
             
             start_time = time.time()
             downloaded = 0
@@ -66,19 +62,17 @@ class FastDownloadService:
                     await progress_callback(downloaded, file_size)
             
             elapsed = time.time() - start_time
-            speed = downloaded / elapsed if elapsed > 0 else 0
-            
-            logger.info(f"Descarga completada: {os.path.basename(file_path)} en {elapsed:.1f}s ({speed/1024/1024:.1f} MB/s)")
+            logger.info(f"Descarga completada en {elapsed:.1f}s")
             
             return True, downloaded
             
         except FloodWait as e:
-            logger.warning(f"FloodWait: Esperando {e.value} segundos")
+            logger.warning(f"FloodWait: {e.value}s")
             await asyncio.sleep(e.value + 1)
             return await self.download_file_fast(client, message, file_path, progress_callback)
             
         except Exception as e:
-            logger.error(f"Error en descarga rápida: {e}", exc_info=True)
+            logger.error(f"Error: {e}")
             return False, 0
             
         finally:
@@ -86,7 +80,7 @@ class FastDownloadService:
                 del self.active_downloads[user_id]
     
     async def download_with_retry(self, client, message, file_path, progress_callback=None, max_retries=MAX_RETRIES):
-        """Descarga con reintentos automáticos"""
+        """Descarga con reintentos optimizado"""
         for attempt in range(max_retries + 1):
             try:
                 success, downloaded = await self.download_file_fast(
@@ -98,11 +92,11 @@ class FastDownloadService:
                 
                 if attempt < max_retries:
                     wait_time = 2 ** attempt
-                    logger.info(f"Reintentando descarga en {wait_time}s (intento {attempt + 1}/{max_retries})")
+                    logger.info(f"Reintento {attempt + 1}/{max_retries} en {wait_time}s")
                     await asyncio.sleep(wait_time)
                     
             except Exception as e:
-                logger.error(f"Error en intento {attempt + 1}: {e}")
+                logger.error(f"Error intento {attempt + 1}: {e}")
                 if attempt < max_retries:
                     await asyncio.sleep(2 ** attempt)
         
