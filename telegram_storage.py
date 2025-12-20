@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class SimpleTelegramStorage:
     def __init__(self, client: Client):
         self.client = client
-        self.bot_username = BOT_USERNAME.replace('@', '')
+        self.bot_username = BOT_USERNAME.replace('@', '') if BOT_USERNAME else "test_nelsonfile2linkbot"
         
     async def initialize(self):
         """Inicialización simplificada - siempre retorna True"""
