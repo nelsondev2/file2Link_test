@@ -1,16 +1,17 @@
 import os
 
 # ===== CONFIGURACIÓN BÁSICA =====
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-RENDER_DOMAIN = os.getenv("RENDER_DOMAIN")
+API_ID = int(os.getenv("API_ID", "12345678"))
+API_HASH = os.getenv("API_HASH", "tu_api_hash")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "tu_bot_token")
+RENDER_DOMAIN = os.getenv("RENDER_DOMAIN", "https://file2link-test.onrender.com")
 PORT = int(os.getenv("PORT", 8080))
 
-# ===== GRUPOS DE TELEGRAM =====
-DB_CHANNEL_ID = os.getenv("DB_CHANNEL_ID")  # Grupo para metadatos
-STORAGE_CHANNEL_ID = os.getenv("STORAGE_CHANNEL_ID")  # Grupo para archivos
-BOT_USERNAME = os.getenv("BOT_USERNAME", "tu_bot_username")  # @username del bot
+# ===== GRUPOS DE TELEGRAM (NO CANALES) =====
+# IMPORTANTE: Los grupos tienen IDs positivos o negativos diferentes
+DB_GROUP_ID = os.getenv("DB_GROUP_ID", "-1234567890")  # Grupo para metadatos
+STORAGE_GROUP_ID = os.getenv("STORAGE_GROUP_ID", "-1234567891")  # Grupo para archivos
+BOT_USERNAME = os.getenv("BOT_USERNAME", "@test_nelsonfile2linkbot")
 
 # ===== LÍMITES =====
 MAX_FILE_SIZE_MB = 2000
