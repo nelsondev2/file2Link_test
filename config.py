@@ -10,8 +10,16 @@ BASE_DIR = "storage"
 PORT = int(os.getenv("PORT", 8080))
 SECRET_KEY = os.getenv("SECRET_KEY", os.urandom(24).hex())
 
+# ==================== SEGURIDAD POR USERNAME (SOLO PARA WEB) ====================
+# Solo estos usernames de Telegram pueden acceder a la URL base (/ y /health)
+# El bot de Telegram (@watch_bot) puede monitorear
+ALLOWED_WEB_USERNAMES = [
+    "watch_bot",  # Tu bot de monitoreo
+    "nelson_file2link_bot",  # El bot principal si quieres que también pueda monitorear
+]
+
 # ==================== LÍMITES DE SEGURIDAD ====================
-MAX_USER_STORAGE_MB = 5000  # 5GB por usuario
+MAX_USER_STORAGE_MB = 5000
 MAX_FILES_PER_USER = 100
 SESSION_TIMEOUT = timedelta(hours=24)
 
