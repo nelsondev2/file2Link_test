@@ -8,7 +8,7 @@ from flask import Flask, send_from_directory, jsonify, render_template_string, r
 
 from config import BASE_DIR, RENDER_DOMAIN, MAX_FILE_SIZE_MB, SECRET_KEY, DOWNLOAD_LINK_EXPIRY_HOURS, ALLOWED_WEB_USERNAMES
 from load_manager import load_manager
-from async_file_service import async_file_service
+from file_service import async_file_service
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
