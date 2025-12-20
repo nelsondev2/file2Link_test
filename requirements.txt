@@ -1,6 +1,7 @@
 aiofiles
 Flask
 pyrogram
+requests
 TgCrypto
 waitress
 psutil
