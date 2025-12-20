@@ -177,7 +177,7 @@ async def initialize_file_service(storage=None):
     global file_service
     
     # Si ya existe una instancia, actualizarla con storage
-    if storage and hasattr(file_service, 'storage'):
+    if storage:
         file_service.storage = storage
     
     logger.info("✅ Servicio de archivos inicializado (modo simplificado)")
