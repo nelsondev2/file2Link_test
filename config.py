@@ -1,26 +1,38 @@
 import os
+from datetime import timedelta
 
-# ===== CONFIGURACIÓN OPTIMIZADA =====
+# ==================== CONFIGURACIÓN PRINCIPAL ====================
 API_ID = int(os.getenv("API_ID", "12345678"))
-API_HASH = os.getenv("API_HASH", "tu_api_hash")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "tu_bot_token")
+API_HASH = os.getenv("API_HASH", "")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 RENDER_DOMAIN = os.getenv("RENDER_DOMAIN", "https://nelson-file2link.onrender.com")
 BASE_DIR = "storage"
 PORT = int(os.getenv("PORT", 8080))
+SECRET_KEY = os.getenv("SECRET_KEY", os.urandom(24).hex())
 
-# Configuración optimizada para CPU limitada
+# ==================== LÍMITES DE SEGURIDAD ====================
+MAX_USER_STORAGE_MB = 5000  # 5GB por usuario
+MAX_FILES_PER_USER = 100
+SESSION_TIMEOUT = timedelta(hours=24)
+
+# ==================== RATE LIMITING ====================
+MAX_REQUESTS_PER_MINUTE = 30
+DOWNLOAD_LINK_EXPIRY_HOURS = 24
+
+# ==================== CONFIGURACIÓN OPTIMIZADA ====================
 MAX_PART_SIZE_MB = 100
-COMPRESSION_TIMEOUT = 600
-MAX_CONCURRENT_PROCESSES = 1
-CPU_USAGE_LIMIT = 80
+MAX_CONCURRENT_PROCESSES = 2
+CPU_USAGE_LIMIT = 75
 
-# ✅ Tamaño máximo de archivos configurable
+# ==================== TAMAÑOS DE ARCHIVO ====================
 MAX_FILE_SIZE_MB = 2000
 MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024
 
-# ⬇️ Configuración para descarga rápida
-DOWNLOAD_BUFFER_SIZE = 131072
-DOWNLOAD_THREADS = 2
+# ==================== CONFIGURACIÓN DE DESCARGA ====================
+DOWNLOAD_BUFFER_SIZE = 65536
 DOWNLOAD_TIMEOUT = 3600
 MAX_RETRIES = 3
-CHUNK_SIZE = 65536
+CHUNK_SIZE = 32768
+
+# ==================== URLs SEGURAS ====================
+ALLOWED_REFERERS = ["t.me", "telegram.org"]
