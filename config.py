@@ -9,7 +9,7 @@ BASE_DIR = "storage"
 PORT = int(os.getenv("PORT", 8080))
 
 # Configuración optimizada para CPU limitada
-MAX_PART_SIZE_MB = 500
+MAX_PART_SIZE_MB = 100
 COMPRESSION_TIMEOUT = 600
 MAX_CONCURRENT_PROCESSES = 1
 CPU_USAGE_LIMIT = 80
