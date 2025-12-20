@@ -1,400 +1,322 @@
+"""
+Servicio de archivos que solo maneja referencias a Telegram
+CERO descargas, CERO almacenamiento en Render
+"""
 import os
-import aiofiles
-import asyncio
-import json
-import time
 import logging
-import urllib.parse
-from typing import Dict, List, Optional, Tuple
-
-from config import BASE_DIR, RENDER_DOMAIN, DOWNLOAD_LINK_EXPIRY_HOURS, SECRET_KEY, MAX_USER_STORAGE_MB, MAX_FILES_PER_USER
-import hmac
-import hashlib
+import time
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-class AsyncFileService:
-    def __init__(self):
-        self.metadata_file = os.path.join(BASE_DIR, ".metadata.json")
-        self.metadata: Dict = {}
-        self.locks: Dict[str, asyncio.Lock] = {}
-        self._load_metadata_sync()
+class TelegramFileService:
+    def __init__(self, telegram_storage):
+        self.storage = telegram_storage
+        self.user_metadata = {}  # Cache en memoria
+        self.loaded_users = set()
         
-    def _load_metadata_sync(self):
-        """Carga inicial síncrona (solo al inicio)"""
+    async def initialize_user(self, user_id):
+        """Carga metadatos del usuario desde Telegram"""
         try:
-            if os.path.exists(self.metadata_file):
-                with open(self.metadata_file, 'r', encoding='utf-8') as f:
-                    self.metadata = json.load(f)
+            user_key = str(user_id)
+            
+            # Si ya está cargado, usar cache
+            if user_key in self.loaded_users:
+                return True
+            
+            # Cargar desde Telegram
+            metadata = await self.storage.load_metadata(user_id, "files")
+            
+            if metadata:
+                self.user_metadata[user_key] = metadata
+                self.loaded_users.add(user_key)
+                logger.info(f"✅ Metadata cargada desde Telegram para usuario {user_id}")
+                return True
             else:
-                self.metadata = {}
-            logger.info("Metadata cargada")
+                # Inicializar nuevo usuario
+                self.user_metadata[user_key] = {
+                    'downloads': {
+                        'next_number': 1,
+                        'files': {},
+                        'created': datetime.now().isoformat()
+                    },
+                    'packed': {
+                        'next_number': 1,
+                        'files': {},
+                        'created': datetime.now().isoformat()
+                    },
+                    'user_info': {
+                        'id': user_id,
+                        'first_use': datetime.now().isoformat(),
+                        'last_activity': datetime.now().isoformat()
+                    }
+                }
+                self.loaded_users.add(user_key)
+                logger.info(f"✅ Nuevo usuario inicializado: {user_id}")
+                return True
+                
         except Exception as e:
-            logger.error(f"Error cargando metadata: {e}")
-            self.metadata = {}
+            logger.error(f"Error inicializando usuario {user_id}: {e}")
+            return False
     
-    async def save_metadata(self):
-        """Guarda metadata de forma asíncrona"""
+    async def save_user_metadata(self, user_id):
+        """Guarda metadatos del usuario en Telegram"""
         try:
-            async with aiofiles.open(self.metadata_file, 'w', encoding='utf-8') as f:
-                await f.write(json.dumps(self.metadata, ensure_ascii=False, indent=2))
+            user_key = str(user_id)
+            
+            if user_key not in self.user_metadata:
+                return False
+            
+            # Actualizar timestamp de actividad
+            if 'user_info' in self.user_metadata[user_key]:
+                self.user_metadata[user_key]['user_info']['last_activity'] = datetime.now().isoformat()
+            
+            await self.storage.save_metadata(user_id, "files", self.user_metadata[user_key])
+            return True
+            
         except Exception as e:
             logger.error(f"Error guardando metadata: {e}")
+            return False
     
-    def _get_user_lock(self, user_id: int) -> asyncio.Lock:
-        """Obtiene lock por usuario"""
-        if user_id not in self.locks:
-            self.locks[user_id] = asyncio.Lock()
-        return self.locks[user_id]
-    
-    def sanitize_filename(self, filename: str) -> str:
-        """Limpia nombre de archivo"""
-        invalid_chars = '<>:"/\\|?*'
-        for char in invalid_chars:
-            filename = filename.replace(char, '_')
-        if len(filename) > 100:
-            name, ext = os.path.splitext(filename)
-            filename = name[:100-len(ext)] + ext
-        return filename
-    
-    async def get_user_directory(self, user_id: int, file_type: str = "downloads") -> str:
-        """Crea y retorna directorio del usuario"""
-        user_dir = os.path.join(BASE_DIR, str(user_id), file_type)
-        await asyncio.to_thread(os.makedirs, user_dir, exist_ok=True)
-        return user_dir
-    
-    async def get_user_storage_usage(self, user_id: int) -> int:
-        """Calcula uso de almacenamiento"""
-        download_dir = await self.get_user_directory(user_id, "downloads")
-        packed_dir = await self.get_user_directory(user_id, "packed")
-        
-        total_size = 0
-        
-        for directory in [download_dir, packed_dir]:
-            if not os.path.exists(directory):
-                continue
+    async def register_file(self, message, user_id, file_type="downloads"):
+        """Registra un archivo (solo referencia, NO descarga)"""
+        try:
+            user_key = str(user_id)
             
-            loop = asyncio.get_event_loop()
-            try:
-                files = await loop.run_in_executor(None, os.listdir, directory)
-                
-                for file in files:
-                    file_path = os.path.join(directory, file)
-                    if os.path.isfile(file_path):
-                        size = await loop.run_in_executor(None, os.path.getsize, file_path)
-                        total_size += size
-            except Exception as e:
-                logger.error(f"Error calculando tamaño {directory}: {e}")
-        
-        return total_size
-    
-    async def check_user_quota(self, user_id: int, additional_size: int = 0) -> Tuple[bool, str]:
-        """Verifica cuota del usuario"""
-        total_size = await self.get_user_storage_usage(user_id)
-        total_size_mb = total_size / (1024 * 1024)
-        
-        if total_size_mb + (additional_size / (1024 * 1024)) > MAX_USER_STORAGE_MB:
-            return False, f"Límite de {MAX_USER_STORAGE_MB}MB alcanzado"
-        
-        downloads = await self.list_user_files(user_id, "downloads")
-        packed = await self.list_user_files(user_id, "packed")
-        
-        if len(downloads) + len(packed) >= MAX_FILES_PER_USER:
-            return False, f"Máximo {MAX_FILES_PER_USER} archivos"
-        
-        return True, ""
-    
-    async def register_file(self, user_id: int, original_name: str, stored_name: str, file_type: str = "downloads") -> int:
-        """Registra archivo en metadata"""
-        async with self._get_user_lock(user_id):
-            user_key = f"{user_id}_{file_type}"
-            if user_key not in self.metadata:
-                self.metadata[user_key] = {"next_number": 1, "files": {}}
+            # Inicializar usuario si no está
+            if user_key not in self.loaded_users:
+                await self.initialize_user(user_id)
             
-            file_num = self.metadata[user_key]["next_number"]
-            self.metadata[user_key]["next_number"] += 1
+            # Verificar que el tipo de archivo existe
+            if file_type not in self.user_metadata[user_key]:
+                self.user_metadata[user_key][file_type] = {
+                    'next_number': 1,
+                    'files': {},
+                    'created': datetime.now().isoformat()
+                }
             
-            self.metadata[user_key]["files"][str(file_num)] = {
-                "original_name": original_name,
-                "stored_name": stored_name,
-                "registered_at": time.time(),
-                "size": 0
+            # Obtener siguiente número
+            file_num = self.user_metadata[user_key][file_type]['next_number']
+            self.user_metadata[user_key][file_type]['next_number'] += 1
+            
+            # Guardar referencia en Telegram (CERO descarga)
+            file_record = await self.storage.save_file_reference(message, user_id, file_type)
+            
+            if not file_record:
+                return None
+            
+            # Guardar en metadata local
+            self.user_metadata[user_key][file_type]['files'][str(file_num)] = file_record
+            
+            # Guardar metadata en Telegram
+            await self.save_user_metadata(user_id)
+            
+            logger.info(f"✅ Archivo registrado (#{file_num}): {file_record.get('original_name')}")
+            
+            # Generar URLs inmediatamente
+            urls = await self.storage.get_file_urls(file_record)
+            
+            return {
+                'number': file_num,
+                'record': file_record,
+                'file_type': file_type,
+                'urls': urls,
+                'name': file_record.get('original_name', 'unknown')
             }
             
-            await self.save_metadata()
-            logger.info(f"Archivo registrado: #{file_num} - {original_name}")
-            return file_num
-    
-    async def update_file_size(self, user_id: int, file_number: int, size: int, file_type: str = "downloads"):
-        """Actualiza tamaño del archivo"""
-        async with self._get_user_lock(user_id):
-            user_key = f"{user_id}_{file_type}"
-            if user_key in self.metadata:
-                file_str = str(file_number)
-                if file_str in self.metadata[user_key]["files"]:
-                    self.metadata[user_key]["files"][file_str]["size"] = size
-                    await self.save_metadata()
-    
-    async def list_user_files(self, user_id: int, file_type: str = "downloads") -> List[Dict]:
-        """Lista archivos del usuario"""
-        user_dir = await self.get_user_directory(user_id, file_type)
-        
-        if not os.path.exists(user_dir):
-            return []
-        
-        user_key = f"{user_id}_{file_type}"
-        files = []
-        
-        async with self._get_user_lock(user_id):
-            if user_key in self.metadata:
-                existing_files = []
-                for file_num_str, file_data in self.metadata[user_key]["files"].items():
-                    file_path = os.path.join(user_dir, file_data["stored_name"])
-                    if os.path.exists(file_path):
-                        existing_files.append((int(file_num_str), file_data))
-                
-                existing_files.sort(key=lambda x: x[0])
-                
-                for file_number, file_data in existing_files:
-                    file_path = os.path.join(user_dir, file_data["stored_name"])
-                    if os.path.isfile(file_path):
-                        loop = asyncio.get_event_loop()
-                        size = await loop.run_in_executor(None, os.path.getsize, file_path)
-                        
-                        if file_data.get("size", 0) != size:
-                            self.metadata[user_key]["files"][str(file_number)]["size"] = size
-                        
-                        if file_type == "downloads":
-                            download_url = await self.create_download_url(user_id, file_data["stored_name"])
-                        else:
-                            download_url = await self.create_packed_url(user_id, file_data["stored_name"])
-                        
-                        files.append({
-                            'number': file_number,
-                            'name': file_data["original_name"],
-                            'stored_name': file_data["stored_name"],
-                            'size': size,
-                            'size_mb': size / (1024 * 1024),
-                            'url': download_url,
-                            'file_type': file_type
-                        })
-                
-                if files:
-                    await self.save_metadata()
-        
-        return files
-    
-    async def create_download_url(self, user_id: int, filename: str) -> str:
-        """Crea URL de descarga con token temporal"""
-        # Importar aquí para evitar circular imports
-        from flask_app import generate_download_token
-        
-        safe_filename = self.sanitize_filename(filename)
-        encoded_filename = urllib.parse.quote(safe_filename)
-        
-        token, expiry = generate_download_token(user_id, safe_filename)
-        
-        return f"{RENDER_DOMAIN}/storage/{user_id}/downloads/{encoded_filename}?token={token}&expiry={expiry}"
-    
-    async def create_packed_url(self, user_id: int, filename: str) -> str:
-        """Crea URL para archivos empaquetados con token"""
-        from flask_app import generate_download_token
-        
-        safe_filename = self.sanitize_filename(filename)
-        encoded_filename = urllib.parse.quote(safe_filename)
-        
-        token, expiry = generate_download_token(user_id, safe_filename)
-        
-        return f"{RENDER_DOMAIN}/storage/{user_id}/packed/{encoded_filename}?token={token}&expiry={expiry}"
-    
-    async def get_file_by_number(self, user_id: int, file_number: int, file_type: str = "downloads") -> Optional[Dict]:
-        """Obtiene información de archivo por número"""
-        user_key = f"{user_id}_{file_type}"
-        
-        async with self._get_user_lock(user_id):
-            if user_key not in self.metadata:
-                return None
-            
-            file_data = self.metadata[user_key]["files"].get(str(file_number))
-            if not file_data:
-                return None
-        
-        user_dir = await self.get_user_directory(user_id, file_type)
-        file_path = os.path.join(user_dir, file_data["stored_name"])
-        
-        if not os.path.exists(file_path):
+        except Exception as e:
+            logger.error(f"Error registrando archivo: {e}")
             return None
-        
-        loop = asyncio.get_event_loop()
-        size = await loop.run_in_executor(None, os.path.getsize, file_path)
-        
-        if file_type == "downloads":
-            download_url = await self.create_download_url(user_id, file_data["stored_name"])
-        else:
-            download_url = await self.create_packed_url(user_id, file_data["stored_name"])
-        
-        return {
-            'number': file_number,
-            'original_name': file_data["original_name"],
-            'stored_name': file_data["stored_name"],
-            'path': file_path,
-            'size': size,
-            'url': download_url,
-            'file_type': file_type
-        }
     
-    async def rename_file(self, user_id: int, file_number: int, new_name: str, file_type: str = "downloads") -> Tuple[bool, str, Optional[str]]:
-        """Renombra un archivo"""
+    async def get_file_urls(self, user_id, file_number, file_type="downloads"):
+        """Obtiene URLs para un archivo"""
         try:
-            user_key = f"{user_id}_{file_type}"
+            user_key = str(user_id)
             
-            async with self._get_user_lock(user_id):
-                if user_key not in self.metadata:
-                    return False, "Usuario no encontrado", None
-                
-                file_info = await self.get_file_by_number(user_id, file_number, file_type)
-                if not file_info:
-                    return False, "Archivo no encontrado", None
-                
-                file_data = self.metadata[user_key]["files"].get(str(file_number))
-                if not file_data:
-                    return False, "Archivo no encontrado en metadata", None
-                
-                new_name = self.sanitize_filename(new_name)
-                user_dir = await self.get_user_directory(user_id, file_type)
-                old_path = os.path.join(user_dir, file_data["stored_name"])
-                
-                if not os.path.exists(old_path):
-                    return False, "Archivo físico no encontrado", None
-                
-                _, ext = os.path.splitext(file_data["stored_name"])
-                new_stored_name = new_name + ext
-                
-                counter = 1
-                base_new_stored_name = new_stored_name
-                while os.path.exists(os.path.join(user_dir, new_stored_name)):
-                    name_no_ext = os.path.splitext(base_new_stored_name)[0]
-                    new_stored_name = f"{name_no_ext}_{counter}{ext}"
-                    counter += 1
-                
-                new_path = os.path.join(user_dir, new_stored_name)
-                
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, os.rename, old_path, new_path)
-                
-                file_data["original_name"] = new_name
-                file_data["stored_name"] = new_stored_name
-                await self.save_metadata()
-                
-                if file_type == "downloads":
-                    new_url = await self.create_download_url(user_id, new_stored_name)
-                else:
-                    new_url = await self.create_packed_url(user_id, new_stored_name)
-                
-                return True, f"Archivo renombrado a: {new_name}", new_url
+            # Asegurarse de que el usuario está cargado
+            if user_key not in self.loaded_users:
+                await self.initialize_user(user_id)
+            
+            # Verificar que el archivo existe
+            if (user_key not in self.user_metadata or 
+                file_type not in self.user_metadata[user_key] or
+                str(file_number) not in self.user_metadata[user_key][file_type]['files']):
+                return None
+            
+            file_record = self.user_metadata[user_key][file_type]['files'][str(file_number)]
+            
+            # Generar URLs
+            urls = await self.storage.get_file_urls(file_record)
+            
+            if urls:
+                return {
+                    'number': file_number,
+                    'name': file_record.get('original_name', 'unknown'),
+                    'size': file_record.get('file_info', {}).get('file_size', 0),
+                    'type': file_record.get('file_info', {}).get('type', 'unknown'),
+                    'urls': urls,
+                    'file_type': file_type,
+                    'timestamp': file_record.get('timestamp', time.time())
+                }
+            
+            return None
             
         except Exception as e:
-            logger.error(f"Error renombrando: {e}")
-            return False, f"Error: {str(e)}", None
+            logger.error(f"Error obteniendo URLs: {e}")
+            return None
     
-    async def delete_file_by_number(self, user_id: int, file_number: int, file_type: str = "downloads") -> Tuple[bool, str]:
-        """Elimina archivo por número"""
+    async def list_user_files(self, user_id, file_type="downloads"):
+        """Lista archivos del usuario"""
         try:
-            user_key = f"{user_id}_{file_type}"
+            user_key = str(user_id)
             
-            async with self._get_user_lock(user_id):
-                if user_key not in self.metadata:
-                    return False, "Usuario no encontrado"
+            # Cargar usuario si no está
+            if user_key not in self.loaded_users:
+                await self.initialize_user(user_id)
+            
+            # Verificar que el tipo existe
+            if file_type not in self.user_metadata[user_key]:
+                return []
+            
+            files = []
+            
+            for file_num_str, file_record in self.user_metadata[user_key][file_type]['files'].items():
+                file_number = int(file_num_str)
                 
-                file_info = await self.get_file_by_number(user_id, file_number, file_type)
-                if not file_info:
-                    return False, "Archivo no encontrado"
+                # Generar URLs
+                urls = await self.storage.get_file_urls(file_record)
                 
-                file_data = self.metadata[user_key]["files"].get(str(file_number))
-                if not file_data:
-                    return False, "Archivo no encontrado en metadata"
-                
-                user_dir = await self.get_user_directory(user_id, file_type)
-                file_path = os.path.join(user_dir, file_data["stored_name"])
-                
-                if os.path.exists(file_path):
-                    loop = asyncio.get_event_loop()
-                    await loop.run_in_executor(None, os.remove, file_path)
-                
-                del self.metadata[user_key]["files"][str(file_number)]
-                
-                remaining_files = sorted(
-                    [(int(num), data) for num, data in self.metadata[user_key]["files"].items()],
-                    key=lambda x: x[0]
-                )
-                
-                self.metadata[user_key]["files"] = {}
-                
-                new_number = 1
-                for old_num, file_data in remaining_files:
-                    self.metadata[user_key]["files"][str(new_number)] = file_data
-                    new_number += 1
-                
-                self.metadata[user_key]["next_number"] = new_number
-                await self.save_metadata()
-                
-                return True, f"Archivo #{file_number} eliminado"
+                if urls:
+                    files.append({
+                        'number': file_number,
+                        'name': file_record.get('original_name', 'unknown'),
+                        'size': file_record.get('file_info', {}).get('file_size', 0),
+                        'type': file_record.get('file_info', {}).get('type', 'unknown'),
+                        'mime_type': file_record.get('file_info', {}).get('mime_type', 'unknown'),
+                        'urls': urls,
+                        'file_type': file_type,
+                        'timestamp': file_record.get('timestamp', time.time()),
+                        'date': datetime.fromtimestamp(file_record.get('timestamp', time.time())).strftime('%Y-%m-%d %H:%M')
+                    })
+            
+            # Ordenar por número (más reciente primero)
+            files.sort(key=lambda x: x['number'], reverse=True)
+            return files
             
         except Exception as e:
-            logger.error(f"Error eliminando: {e}")
-            return False, f"Error: {str(e)}"
+            logger.error(f"Error listando archivos: {e}")
+            return []
     
-    async def delete_all_files(self, user_id: int, file_type: str = "downloads") -> Tuple[bool, str]:
-        """Elimina todos los archivos del usuario"""
+    async def delete_file(self, user_id, file_number, file_type="downloads"):
+        """Elimina referencia a archivo"""
         try:
-            user_dir = await self.get_user_directory(user_id, file_type)
+            user_key = str(user_id)
             
-            if not os.path.exists(user_dir):
-                return False, f"No hay archivos {file_type}"
+            # Cargar usuario si no está
+            if user_key not in self.loaded_users:
+                await self.initialize_user(user_id)
             
-            loop = asyncio.get_event_loop()
-            files = await loop.run_in_executor(None, os.listdir, user_dir)
+            # Verificar que el archivo existe
+            if (user_key not in self.user_metadata or 
+                file_type not in self.user_metadata[user_key] or
+                str(file_number) not in self.user_metadata[user_key][file_type]['files']):
+                return False, "Archivo no encontrado"
             
-            if not files:
-                return False, f"No hay archivos {file_type}"
+            # Obtener registro del archivo
+            file_record = self.user_metadata[user_key][file_type]['files'][str(file_number)]
+            file_name = file_record.get('original_name', f"#{file_number}")
             
-            deleted_count = 0
-            for filename in files:
-                file_path = os.path.join(user_dir, filename)
-                if os.path.isfile(file_path):
-                    await loop.run_in_executor(None, os.remove, file_path)
-                    deleted_count += 1
+            # Opcional: Eliminar referencia del canal de storage
+            await self.storage.delete_file_reference(file_record)
             
-            user_key = f"{user_id}_{file_type}"
-            if user_key in self.metadata:
-                self.metadata[user_key] = {"next_number": 1, "files": {}}
-                await self.save_metadata()
+            # Eliminar de metadata local
+            del self.user_metadata[user_key][file_type]['files'][str(file_number)]
             
-            return True, f"Eliminados {deleted_count} archivos"
+            # Reorganizar números si es necesario (opcional)
+            # ...
+            
+            # Guardar cambios
+            await self.save_user_metadata(user_id)
+            
+            # NOTA: El archivo real sigue en Telegram, solo eliminamos la referencia
+            
+            return True, f"✅ Archivo eliminado: #{file_number} - {file_name}"
             
         except Exception as e:
-            logger.error(f"Error eliminando todos: {e}")
-            return False, f"Error: {str(e)}"
+            logger.error(f"Error eliminando archivo: {e}")
+            return False, f"❌ Error: {str(e)}"
     
-    def get_original_filename(self, user_id: int, stored_filename: str, file_type: str = "downloads") -> str:
-        """Obtiene nombre original del archivo (síncrono para Flask)"""
-        user_key = f"{user_id}_{file_type}"
-        if user_key not in self.metadata:
-            return stored_filename
-        
-        for file_data in self.metadata[user_key]["files"].values():
-            if file_data["stored_name"] == stored_filename:
-                return file_data["original_name"]
-        
-        return stored_filename
+    async def get_user_stats(self, user_id):
+        """Obtiene estadísticas del usuario"""
+        try:
+            user_key = str(user_id)
+            
+            if user_key not in self.loaded_users:
+                await self.initialize_user(user_id)
+            
+            if user_key not in self.user_metadata:
+                return None
+            
+            downloads = await self.list_user_files(user_id, "downloads")
+            packed = await self.list_user_files(user_id, "packed")
+            
+            total_files = len(downloads) + len(packed)
+            total_size = sum(f['size'] for f in downloads + packed if f['size'])
+            
+            return {
+                'user_id': user_id,
+                'downloads_count': len(downloads),
+                'packed_count': len(packed),
+                'total_files': total_files,
+                'total_size': total_size,
+                'total_size_mb': total_size / (1024 * 1024) if total_size > 0 else 0,
+                'first_use': self.user_metadata[user_key].get('user_info', {}).get('first_use', 'unknown'),
+                'last_activity': self.user_metadata[user_key].get('user_info', {}).get('last_activity', 'unknown')
+            }
+            
+        except Exception as e:
+            logger.error(f"Error obteniendo stats: {e}")
+            return None
     
-    def format_bytes(self, size: int) -> str:
-        """Formatea bytes a formato legible"""
-        for unit in ['B', 'KB', 'MB', 'GB']:
-            if size < 1024.0:
-                return f"{size:.1f} {unit}"
-            size /= 1024.0
-        return f"{size:.1f} TB"
+    async def cleanup_user_data(self, user_id):
+        """Limpia todos los datos del usuario"""
+        try:
+            user_key = str(user_id)
+            
+            if user_key in self.user_metadata:
+                # Opcional: Eliminar referencias de storage
+                for file_type in ['downloads', 'packed']:
+                    if file_type in self.user_metadata[user_key]:
+                        for file_record in self.user_metadata[user_key][file_type]['files'].values():
+                            await self.storage.delete_file_reference(file_record)
+                
+                # Eliminar metadata
+                del self.user_metadata[user_key]
+                if user_key in self.loaded_users:
+                    self.loaded_users.remove(user_key)
+                
+                # También eliminar de Telegram (opcional)
+                # Para esto necesitaríamos trackear el message_id de la metadata
+                
+                return True, "✅ Todos los datos del usuario limpiados"
+            
+            return False, "❌ Usuario no encontrado"
+            
+        except Exception as e:
+            logger.error(f"Error limpiando datos: {e}")
+            return False, f"❌ Error: {str(e)}"
 
 # Instancia global
-async_file_service = AsyncFileService()
+file_service = None
+
+async def initialize_file_service(storage):
+    """Inicializa el servicio de archivos"""
+    global file_service
+    
+    if storage is None:
+        logger.error("❌ No se pudo inicializar file_service: storage es None")
+        return None
+    
+    file_service = TelegramFileService(storage)
+    logger.info("✅ Servicio de archivos Telegram inicializado (0 CPU, 0 almacenamiento)")
+    return file_service
