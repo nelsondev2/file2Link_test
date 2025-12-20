@@ -1,59 +1,74 @@
 #!/bin/bash
 set -o errexit
 
-echo "🚀 Iniciando Bot de File2Link - Versión Optimizada..."
+echo "🚀 Iniciando Bot de File2Link - PRODUCCIÓN"
 
 # ===========================================
-# FASE 1: OPTIMIZACIONES DEL SISTEMA
+# FASE 1: SEGURIDAD Y OPTIMIZACIONES
 # ===========================================
 
-echo "⚡ Aplicando optimizaciones de rendimiento..."
+echo "🔒 Configurando seguridad..."
 
-# Aumentar límites del sistema para descargas grandes
-ulimit -n 65536 2>/dev/null || true
-echo "  ✓ Límites de archivos aumentados"
+# Configurar directorio seguro
+mkdir -p storage
+chmod 700 storage
 
-# Configurar buffer TCP para mejor rendimiento de red
-sysctl -w net.core.rmem_max=16777216 2>/dev/null || true
-sysctl -w net.core.wmem_max=16777216 2>/dev/null || true
-echo "  ✓ Buffers TCP optimizados"
+# Configurar ulimits
+ulimit -n 100000 2>/dev/null || true
+ulimit -u 10000 2>/dev/null || true
+
+echo "  ✓ Configuración de seguridad aplicada"
 
 # ===========================================
-# FASE 2: VERIFICACIÓN DE VARIABLES DE ENTORNO
+# FASE 2: VERIFICACIÓN CRÍTICA
 # ===========================================
 
-echo "🔧 Verificando variables de entorno..."
+echo "🔍 Verificando variables críticas..."
 
-if [ -z "$BOT_TOKEN" ]; then
-    echo "❌ ERROR: BOT_TOKEN no configurado"
-    echo "   Configúralo en Render.com → Environment Variables"
+REQUIRED_VARS=("BOT_TOKEN" "API_ID" "API_HASH")
+MISSING_VARS=()
+
+for VAR in "${REQUIRED_VARS[@]}"; do
+    if [ -z "${!VAR}" ]; then
+        MISSING_VARS+=("$VAR")
+    fi
+done
+
+if [ ${#MISSING_VARS[@]} -gt 0 ]; then
+    echo "❌ ERROR: Variables faltantes:"
+    printf '   • %s\n' "${MISSING_VARS[@]}"
     exit 1
 fi
 
-if [ -z "$API_ID" ]; then
-    echo "❌ ERROR: API_ID no configurado"
-    echo "   Configúralo en Render.com → Environment Variables"
-    exit 1
-fi
-
-if [ -z "$API_HASH" ]; then
-    echo "❌ ERROR: API_HASH no configurado"
-    echo "   Configúralo en Render.com → Environment Variables"
-    exit 1
-fi
-
-echo "✅ Todas las variables de entorno configuradas"
+echo "✅ Variables verificadas"
 
 # ===========================================
-# FASE 3: INICIO DE LA APLICACIÓN
+# FASE 3: LIMPIEZA Y PREPARACIÓN
 # ===========================================
 
-echo "🎯 Iniciando bot optimizado..."
-echo "📊 Configuración de descarga:"
-echo "   • Buffer: 128KB"
-echo "   • Timeout: 1 hora"
-echo "   • Reintentos: 3"
-echo "==========================================="
+echo "🧹 Preparando entorno..."
 
-# Ejecutar el bot
-exec python main.py
+# Limpiar archivos temporales viejos
+find storage -name "temp_*" -type f -mtime +1 -delete 2>/dev/null || true
+
+# Asegurar permisos
+find storage -type d -exec chmod 700 {} \;
+find storage -type f -exec chmod 600 {} \;
+
+echo "  ✓ Entorno preparado"
+
+# ===========================================
+# FASE 4: INICIO DEL BOT
+# ===========================================
+
+echo "🎯 Iniciando servicios..."
+echo "================================"
+echo "📊 Configuración:"
+echo "   • Límite archivo: ${MAX_FILE_SIZE_MB:-2000}MB"
+echo "   • Buffer: 64KB"
+echo "   • Procesos: ${MAX_CONCURRENT_PROCESSES:-2}"
+echo "   • Seguridad: Token temporal"
+echo "================================"
+
+# Ejecutar con logging detallado
+exec python -u main.py 2>&1 | tee -a bot.log
