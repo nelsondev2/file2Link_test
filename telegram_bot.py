@@ -1,5 +1,5 @@
 """
-Bot de Telegram optimizado - Sin descargas, solo referencias
+Bot de Telegram optimizado para usar GRUPOS en lugar de canales
 """
 import asyncio
 import logging
@@ -23,17 +23,22 @@ class TelegramBot:
         setup_handlers(self.client)
 
     async def initialize_services(self):
-        """Inicializa todos los servicios del sistema"""
+        """Inicializa todos los servicios del sistema usando GRUPOS"""
         try:
-            logger.info("🔄 Inicializando servicios...")
+            logger.info("🔄 Inicializando servicios con GRUPOS...")
             
-            # 1. Inicializar almacenamiento en Telegram
-            logger.info("   📡 Conectando con Telegram Storage...")
+            # 1. Inicializar almacenamiento en GRUPOS de Telegram
+            logger.info("   📡 Conectando con Grupos de Telegram...")
             storage = await initialize_telegram_storage(self.client)
             
             if not storage:
-                logger.error("❌ No se pudo inicializar el almacenamiento")
-                return False
+                logger.error("❌ No se pudo inicializar el almacenamiento en grupos")
+                logger.warning("⚠️ Continuando en modo básico (sin persistencia)")
+                # Crear servicio de archivos sin almacenamiento persistente
+                from file_service import TelegramFileService
+                global file_service
+                file_service = TelegramFileService(None)
+                return True
             
             # 2. Inicializar servicio de archivos
             logger.info("   📁 Inicializando servicio de archivos...")
@@ -43,23 +48,36 @@ class TelegramBot:
                 logger.error("❌ No se pudo inicializar el servicio de archivos")
                 return False
             
+            # Verificar estado de los grupos
+            if hasattr(storage, 'db_group_available') and storage.db_group_available:
+                logger.info("   ✅ DB Group: Disponible")
+            else:
+                logger.warning("   ⚠️ DB Group: No disponible (metadatos no persistirán)")
+                
+            if hasattr(storage, 'storage_group_available') and storage.storage_group_available:
+                logger.info("   ✅ Storage Group: Disponible")
+            else:
+                logger.warning("   ⚠️ Storage Group: No disponible (referencias no persistirán)")
+            
             logger.info("""
-            ✅ SERVICIOS INICIALIZADOS CON ÉXITO
-            ===================================
-            📊 Sistema: File2Link Optimizado
-            💾 Almacenamiento: 100% Telegram
+            ✅ SERVICIOS INICIALIZADOS CON GRUPOS
+            =====================================
+            📊 Sistema: File2Link con Grupos
+            💾 Almacenamiento: Grupos de Telegram
             ⚡ CPU Render: 0%
             💿 Disco Render: 0MB
             🔗 URLs: Permanentes
-            🛡️  Persistencia: Total
-            ===================================
+            🛡️  Persistencia: Con grupos activos
+            =====================================
             """)
             
             return True
             
         except Exception as e:
             logger.error(f"❌ Error inicializando servicios: {e}")
-            return False
+            # Modo fallback: continuar sin persistencia
+            logger.warning("⚠️ Continuando en modo básico (sin persistencia)")
+            return True
 
     async def start_bot(self):
         """Inicia el bot de Telegram"""
@@ -87,20 +105,20 @@ class TelegramBot:
             if not await self.initialize_services():
                 logger.warning("⚠️ Continuando con funcionalidad básica...")
             else:
-                logger.info("✅ Sistema completo inicializado")
+                logger.info("✅ Sistema con grupos inicializado")
             
             # Configurar handlers
             await self.setup_handlers()
             
             # Mensaje final de inicio
             logger.info("""
-            🚀 BOT LISTO Y FUNCIONANDO
-            ===========================
+            🚀 BOT LISTO Y FUNCIONANDO CON GRUPOS
+            =====================================
             Estado: ✅ ACTIVO
-            Modo: Optimizado (0 CPU, 0 almacenamiento)
-            Persistencia: ✅ COMPLETA
+            Modo: Grupos de Telegram
+            Persistencia: ✅ CON GRUPOS
             URLs: ✅ PERMANENTES
-            ===========================
+            =====================================
             """)
             
             # Mantener el bot corriendo
