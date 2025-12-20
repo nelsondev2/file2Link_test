@@ -1,55 +1,144 @@
 """
-Sistema de almacenamiento 100% en Telegram - CERO carga en Render
+Sistema de almacenamiento 100% en GRUPOS de Telegram - NO canales
 """
 import logging
 import time
 import json
+import tempfile
+import os
 from datetime import datetime
 from pyrogram.types import Message
 from pyrogram import Client
 
-from config import DB_CHANNEL_ID, STORAGE_CHANNEL_ID, BOT_USERNAME, BOT_TOKEN, RENDER_DOMAIN
+from config import DB_GROUP_ID, STORAGE_GROUP_ID, BOT_USERNAME, BOT_TOKEN, RENDER_DOMAIN
 
 logger = logging.getLogger(__name__)
 
-class TelegramStorage:
+class TelegramGroupStorage:
     def __init__(self, client: Client):
         self.client = client
-        self.db_channel_id = int(DB_CHANNEL_ID)
-        self.storage_channel_id = int(STORAGE_CHANNEL_ID)
+        self.db_group_id = self._parse_group_id(DB_GROUP_ID)
+        self.storage_group_id = self._parse_group_id(STORAGE_GROUP_ID)
+        self.bot_username = BOT_USERNAME
         
-    async def save_metadata(self, user_id, data_type, data):
-        """Guarda metadatos en el canal de base de datos"""
+    def _parse_group_id(self, group_id_str):
+        """Convierte ID de grupo de string a int, manejando diferentes formatos"""
         try:
+            # Los grupos pueden tener IDs como: "-1234567890" o "1234567890"
+            group_id = int(group_id_str)
+            
+            # Si es negativo, es un supergrupo (correcto)
+            # Si es positivo, podría ser un grupo normal
+            return group_id
+            
+        except Exception as e:
+            logger.error(f"Error parseando group ID {group_id_str}: {e}")
+            return None
+    
+    async def initialize(self):
+        """Inicializa el almacenamiento verificando acceso a los grupos"""
+        try:
+            logger.info("🔍 Verificando acceso a grupos...")
+            
+            # Verificar DB Group
+            if self.db_group_id:
+                try:
+                    db_group = await self.client.get_chat(self.db_group_id)
+                    logger.info(f"✅ DB Group: {db_group.title} (ID: {self.db_group_id})")
+                    
+                    # Verificar si el bot es admin
+                    me = await self.client.get_me()
+                    member = await self.client.get_chat_member(self.db_group_id, me.id)
+                    
+                    if member.status in ["administrator", "creator"]:
+                        logger.info("   👑 Bot es administrador del DB Group")
+                        self.db_group_available = True
+                    else:
+                        logger.warning("   ⚠️ Bot NO es administrador del DB Group")
+                        self.db_group_available = False
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error accediendo al DB Group: {e}")
+                    self.db_group_available = False
+            else:
+                logger.warning("⚠️ DB_GROUP_ID no configurado")
+                self.db_group_available = False
+            
+            # Verificar Storage Group
+            if self.storage_group_id:
+                try:
+                    storage_group = await self.client.get_chat(self.storage_group_id)
+                    logger.info(f"✅ Storage Group: {storage_group.title} (ID: {self.storage_group_id})")
+                    
+                    # Verificar si el bot es admin
+                    me = await self.client.get_me()
+                    member = await self.client.get_chat_member(self.storage_group_id, me.id)
+                    
+                    if member.status in ["administrator", "creator"]:
+                        logger.info("   👑 Bot es administrador del Storage Group")
+                        self.storage_group_available = True
+                    else:
+                        logger.warning("   ⚠️ Bot NO es administrador del Storage Group")
+                        self.storage_group_available = False
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error accediendo al Storage Group: {e}")
+                    self.storage_group_available = False
+            else:
+                logger.warning("⚠️ STORAGE_GROUP_ID no configurado")
+                self.storage_group_available = False
+            
+            # Resumen
+            if self.db_group_available and self.storage_group_available:
+                logger.info("✅ Almacenamiento en grupos inicializado correctamente")
+                return True
+            else:
+                logger.warning("⚠️ Almacenamiento parcialmente disponible")
+                logger.warning("   Los datos pueden no persistir después de reinicios")
+                return True  # Continuamos igual pero con advertencias
+                
+        except Exception as e:
+            logger.error(f"❌ Error inicializando almacenamiento: {e}")
+            # Modo fallback: seguir sin persistencia
+            self.db_group_available = False
+            self.storage_group_available = False
+            return True  # IMPORTANTE: Retornar True para continuar
+    
+    async def save_metadata(self, user_id, data_type, data):
+        """Guarda metadatos en el grupo de base de datos"""
+        try:
+            if not self.db_group_available:
+                logger.warning("⚠️ DB Group no disponible, metadata no persistirá")
+                return None
+            
             key = f"user_{user_id}_{data_type}"
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             
-            # Formato simple para metadata
+            # Formato para metadata
             metadata_text = f"""📁 METADATA | {key} | {timestamp}
-User: {user_id}
-Type: {data_type}
-Created: {datetime.now().isoformat()}
+Usuario: {user_id}
+Tipo: {data_type}
+Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 """
             
-            # Guardar como mensaje de texto
+            # Guardar como mensaje de texto en el grupo
             message = await self.client.send_message(
-                chat_id=self.db_channel_id,
+                chat_id=self.db_group_id,
                 text=metadata_text
             )
             
-            # Guardar datos reales como documento JSON
+            # Guardar datos como JSON en un archivo temporal
             data_json = json.dumps(data, ensure_ascii=False, indent=2)
             
-            # Crear archivo temporal con los datos
-            import tempfile
+            # Crear archivo temporal
             with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as f:
                 f.write(data_json)
                 temp_file = f.name
             
             try:
-                # Enviar como documento
+                # Enviar como documento adjunto
                 await self.client.send_document(
-                    chat_id=self.db_channel_id,
+                    chat_id=self.db_group_id,
                     document=temp_file,
                     file_name=f"{key}_{timestamp}.json",
                     caption=f"📁 DATA | {key}",
@@ -57,39 +146,40 @@ Created: {datetime.now().isoformat()}
                 )
             finally:
                 # Limpiar archivo temporal
-                import os
-                os.unlink(temp_file)
+                if os.path.exists(temp_file):
+                    os.unlink(temp_file)
             
-            logger.info(f"💾 Metadata guardada: {key} (msg {message.id})")
+            logger.info(f"💾 Metadata guardada en grupo: {key} (msg {message.id})")
             return message.id
             
         except Exception as e:
-            logger.error(f"Error guardando metadata: {e}")
+            logger.error(f"Error guardando metadata en grupo: {e}")
             return None
     
     async def load_metadata(self, user_id, data_type):
-        """Carga metadatos desde el canal"""
+        """Carga metadatos desde el grupo"""
         try:
+            if not self.db_group_available:
+                logger.warning("⚠️ DB Group no disponible, no se puede cargar metadata")
+                return None
+            
             key = f"user_{user_id}_{data_type}"
             
-            # Buscar mensaje principal
+            # Buscar mensaje principal en el grupo
             async for message in self.client.search_messages(
-                chat_id=self.db_channel_id,
+                chat_id=self.db_group_id,
                 query=f"📁 METADATA | {key}",
                 limit=10
             ):
                 if message.text and f"📁 METADATA | {key}" in message.text:
-                    # Buscar mensaje de datos (reply o siguiente)
+                    # Buscar mensaje con datos adjuntos
                     async for reply in self.client.get_chat_history(
-                        chat_id=self.db_channel_id,
+                        chat_id=self.db_group_id,
                         limit=10,
-                        offset_id=message.id
+                        offset_id=message.id - 1
                     ):
                         if reply.document and reply.caption and f"📁 DATA | {key}" in reply.caption:
                             # Descargar el documento JSON
-                            import tempfile
-                            import os
-                            
                             temp_file = f"temp_{key}.json"
                             await self.client.download_media(reply, file_name=temp_file)
                             
@@ -101,16 +191,21 @@ Created: {datetime.now().isoformat()}
                                 if os.path.exists(temp_file):
                                     os.unlink(temp_file)
             
+            logger.info(f"📭 No hay metadata para {key} en el grupo")
             return None
             
         except Exception as e:
-            logger.error(f"Error cargando metadata: {e}")
+            logger.error(f"Error cargando metadata desde grupo: {e}")
             return None
     
     async def save_file_reference(self, message: Message, user_id, file_type="downloads"):
-        """Guarda referencia a archivo en Telegram (NO descarga el contenido)"""
+        """Guarda referencia a archivo en el grupo de storage (NO descarga el contenido)"""
         try:
-            # Obtener file_id y file_unique_id de Telegram
+            if not self.storage_group_available:
+                logger.warning("⚠️ Storage Group no disponible, referencia no persistirá")
+                return None
+            
+            # Obtener información del archivo
             file_info = self._extract_file_info(message)
             if not file_info:
                 return None
@@ -127,28 +222,28 @@ Created: {datetime.now().isoformat()}
                 'date': message.date.timestamp() if message.date else time.time()
             }
             
-            # Guardar referencia en canal de storage
+            # Guardar referencia en el grupo de storage
             storage_text = f"""📦 FILE_REF | {user_id} | {file_type}
-File: {file_info.get('file_name', 'unknown')}
-Size: {file_info.get('file_size', 0)} bytes
-Type: {file_info.get('mime_type', 'unknown')}
-Time: {datetime.now().isoformat()}
+Archivo: {file_info.get('file_name', 'unknown')}
+Tamaño: {file_info.get('file_size', 0)} bytes
+Tipo: {file_info.get('mime_type', 'unknown')}
+Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 FileID: {file_info.get('file_id')}
 UniqueID: {file_info.get('file_unique_id')}
 """
             
             storage_msg = await self.client.send_message(
-                chat_id=self.storage_channel_id,
+                chat_id=self.storage_group_id,
                 text=storage_text
             )
             
             file_record['storage_msg_id'] = storage_msg.id
             
-            logger.info(f"✅ Archivo referenciado en Telegram: {file_info.get('file_name')}")
+            logger.info(f"✅ Archivo referenciado en grupo: {file_info.get('file_name')}")
             return file_record
             
         except Exception as e:
-            logger.error(f"Error guardando referencia de archivo: {e}")
+            logger.error(f"Error guardando referencia en grupo: {e}")
             return None
     
     async def get_file_urls(self, file_record):
@@ -158,12 +253,12 @@ UniqueID: {file_info.get('file_unique_id')}
             user_id = file_record['user_id']
             
             # 1. Deep link de Telegram
-            deep_link = f"https://t.me/{BOT_USERNAME}?start=file_{file_id}_{user_id}"
+            deep_link = f"https://t.me/{self.bot_username.replace('@', '')}?start=file_{file_id}_{user_id}"
             
             # 2. URL de nuestro proxy
             proxy_url = f"{RENDER_DOMAIN}/file/{file_id}/{user_id}"
             
-            # 3. URL directa a API de Telegram (requiere token)
+            # 3. URL directa a API de Telegram
             direct_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_id}"
             
             # 4. URL para descarga directa
@@ -261,11 +356,14 @@ UniqueID: {file_info.get('file_unique_id')}
             return None
     
     async def delete_file_reference(self, file_record):
-        """Elimina referencia de archivo (opcional)"""
+        """Elimina referencia de archivo del grupo"""
         try:
+            if not self.storage_group_available:
+                return False
+                
             if 'storage_msg_id' in file_record:
                 await self.client.delete_messages(
-                    chat_id=self.storage_channel_id,
+                    chat_id=self.storage_group_id,
                     message_ids=file_record['storage_msg_id']
                 )
                 return True
@@ -273,57 +371,16 @@ UniqueID: {file_info.get('file_unique_id')}
         except Exception as e:
             logger.error(f"Error eliminando referencia: {e}")
             return False
-    
-    async def cleanup_old_metadata(self, days_old=30):
-        """Limpia metadatos antiguos"""
-        try:
-            deleted = 0
-            cutoff_time = time.time() - (days_old * 24 * 3600)
-            
-            async for message in self.client.get_chat_history(self.db_channel_id, limit=100):
-                if message.text and "📁 METADATA |" in message.text:
-                    # Extraer timestamp del texto
-                    import re
-                    match = re.search(r'(\d{8}_\d{6})', message.text)
-                    if match:
-                        timestamp_str = match.group(1)
-                        try:
-                            msg_date = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
-                            if msg_date.timestamp() < cutoff_time:
-                                # Eliminar mensaje y sus respuestas
-                                await self.client.delete_messages(
-                                    chat_id=self.db_channel_id,
-                                    message_ids=message.id
-                                )
-                                deleted += 1
-                        except:
-                            pass
-            
-            logger.info(f"🧹 Metadata antigua limpiada: {deleted} registros")
-            return deleted
-            
-        except Exception as e:
-            logger.error(f"Error en limpieza: {e}")
-            return 0
 
 # Instancia global
 telegram_storage = None
 
 async def initialize_telegram_storage(client):
-    """Inicializa el almacenamiento en Telegram"""
+    """Inicializa el almacenamiento en grupos de Telegram"""
     global telegram_storage
-    telegram_storage = TelegramStorage(client)
+    telegram_storage = TelegramGroupStorage(client)
     
-    # Verificar conexión a los canales
-    try:
-        db_chat = await client.get_chat(int(DB_CHANNEL_ID))
-        storage_chat = await client.get_chat(int(STORAGE_CHANNEL_ID))
-        
-        logger.info(f"✅ Almacenamiento Telegram inicializado")
-        logger.info(f"   📁 DB Channel: {db_chat.title}")
-        logger.info(f"   📦 Storage Channel: {storage_chat.title}")
-        
-        return telegram_storage
-    except Exception as e:
-        logger.error(f"❌ Error conectando a canales: {e}")
-        return None
+    # Inicializar y verificar acceso
+    await telegram_storage.initialize()
+    
+    return telegram_storage
