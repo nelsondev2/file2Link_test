@@ -24,3 +24,7 @@ DOWNLOAD_THREADS = 2
 DOWNLOAD_TIMEOUT = 3600
 MAX_RETRIES = 3
 CHUNK_SIZE = 65536
+
+PROGRESS_UPDATE_INTERVAL = 0.3  # Intervalo de actualización de progreso (segundos)
+MIN_SPEED_FOR_ETA = 1024  # Mínimo de bytes/seg para calcular ETA
+COMPACT_PROGRESS_THRESHOLD = 0.5  # Usar progreso compacto si la actualización es más frecuente que esto
