@@ -1,6 +1,6 @@
 import logging
-import os
 import time
+import os
 from file_service import file_service
 
 logger = logging.getLogger(__name__)
@@ -35,18 +35,11 @@ class ProgressService:
             return "Calculando..."
         
         # Suavizar velocidad usando historial del usuario
-        if user_id:
-            if user_id not in self.speed_history:
-                self.speed_history[user_id] = []
-            
-            self.speed_history[user_id].append(speed)
-            if len(self.speed_history[user_id]) > 5:
-                self.speed_history[user_id].pop(0)
-            
-            # Usar velocidad promedio
+        smoothed_speed = speed  # Valor por defecto
+        
+        if user_id and user_id in self.speed_history and len(self.speed_history[user_id]) > 0:
+            # Usar velocidad promedio del historial
             smoothed_speed = sum(self.speed_history[user_id]) / len(self.speed_history[user_id])
-        else:
-            smoothed_speed = speed
         
         remaining_bytes = total - current
         if remaining_bytes <= 0:
@@ -106,6 +99,9 @@ class ProgressService:
     
     def calculate_per_second(self, current, total, start_time):
         """Calcula bytes por segundo basado en tiempo real"""
+        if start_time is None or current <= 0:
+            return 0
+        
         elapsed = time.time() - start_time
         if elapsed > 0:
             return current / elapsed
@@ -131,15 +127,19 @@ class ProgressService:
         processed = file_service.format_bytes(current)
         total_size = file_service.format_bytes(total)
         
+        # Determinar qué velocidad usar
+        final_speed = speed  # Valor por defecto
+        
         # Calcular velocidad real si tenemos tiempo de inicio
-        if start_time and current > 0:
+        if start_time is not None and current > 0:
             real_speed = self.calculate_per_second(current, total, start_time)
-            speed_str = self.format_speed(real_speed)
-        else:
-            speed_str = self.format_speed(speed)
+            if real_speed > 0:
+                final_speed = real_speed
+        
+        speed_str = self.format_speed(final_speed)
         
         # Calcular ETA con suavizado
-        eta = self.calculate_eta(current, total, speed if start_time is None else real_speed, user_id)
+        eta = self.calculate_eta(current, total, final_speed, user_id)
         
         # Porcentaje exacto
         percent = (current / total * 100) if total > 0 else 0
@@ -155,7 +155,7 @@ class ProgressService:
             message += f"**📋 En cola:** {current_file}/{total_files}\n"
             
             # Mostrar progreso de la cola completa
-            queue_percent = (current_file - 1) / total_files * 100
+            queue_percent = ((current_file - 1) / total_files * 100) if total_files > 0 else 0
             message += f"**📦 Progreso total:** {queue_percent:.1f}%\n"
         
         # Información adicional
@@ -182,7 +182,7 @@ class ProgressService:
         if total == 0:
             return f"`{filename[:20]}...` ▱▱▱▱▱ 0.0%"
         
-        percent = (current / total * 100)
+        percent = (current / total * 100) if total > 0 else 0
         bar_length = 8
         filled = int(bar_length * percent / 100)
         bar = '█' * filled + '░' * (bar_length - filled)
@@ -196,7 +196,8 @@ class ProgressService:
             else:
                 speed_str = f" {avg_speed/1024:.0f}KB/s"
         
-        return f"`{filename[:15]}...` {bar} {percent:.1f}%{speed_str}"
+        display_name = filename[:15] + "..." if len(filename) > 18 else filename
+        return f"`{display_name}` {bar} {percent:.1f}%{speed_str}"
     
     def create_completion_message(self, filename, total_size, time_taken, user_first_name):
         """Mensaje especial cuando se completa una transferencia"""
