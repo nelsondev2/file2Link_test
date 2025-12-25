@@ -10,7 +10,7 @@ from datetime import datetime
 import aiofiles
 from pyrogram import Client
 from pyrogram.types import Message
-from pyrogram.errors import FloodWait, BadRequest, NetworkError
+from pyrogram.errors import FloodWait, BadRequest, ConnectionError
 
 from config import config
 
