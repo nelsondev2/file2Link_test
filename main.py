@@ -6,7 +6,6 @@ import sys
 import time
 import logging
 import asyncio
-import signal
 from pathlib import Path
 from threading import Thread, Semaphore
 
@@ -88,7 +87,6 @@ def index():
 
 @app.route("/files")
 def files():
-    # Lista simple de usuarios y archivos (no autenticada, para administración interna)
     users = []
     if os.path.exists(BASE_DIR):
         for user in sorted(os.listdir(BASE_DIR)):
@@ -108,15 +106,14 @@ def serve_file(user_id, filename):
     return send_from_directory(user_dir, filename, as_attachment=True)
 
 # -------------------------
-# Pyrogram bot
+# Pyrogram bot (in_memory)
 # -------------------------
 bot = Client(
     "nelson_file2link_bot",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
-    workdir="./session_data",
-    workers=4
+    in_memory=True   # ✅ evita SQLite, ideal para Render
 )
 
 # Mensajes y botones compactos
@@ -142,10 +139,6 @@ async def send_short_reply(message: Message, text: str, reply_markup=None):
 # Descarga optimizada con download_media
 # -------------------------
 async def download_with_progress(client: Client, message: Message, dest_path: str):
-    """
-    Usa pyrogram.download_media con callback para actualizar progreso.
-    Mantiene un solo mensaje de progreso por descarga.
-    """
     progress_msg = None
     last_update = 0
 
@@ -155,33 +148,26 @@ async def download_with_progress(client: Client, message: Message, dest_path: st
             percent = (current / total * 100) if total else 0
             now = time.time()
             if now - last_update < 1 and percent < 99.5:
-                return  # actualizar cada ~1s
+                return
             last_update = now
             bar = short_progress_bar(percent)
             text = f"⚡ Descargando `{os.path.basename(dest_path)}`\n{bar} {percent:.1f}%\n{current//1024} KB / {total//1024} KB"
-            # editar mensaje de progreso (sin await en callback)
             asyncio.get_event_loop().create_task(
                 (progress_msg.edit_text(text) if progress_msg else message.reply_text(text))
             )
         except Exception:
             logger.exception("Error en progress_cb")
 
-    # Crear carpeta destino
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-
-    # Reservar semáforo (bloqueante en hilo async)
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, download_semaphore.acquire)
 
     try:
-        # Enviar mensaje inicial
         progress_msg = await message.reply_text(f"⚡ Preparando descarga `{os.path.basename(dest_path)}`...")
-        # Pyrogram download_media soporta progress callback
         await client.download_media(message, file_name=dest_path, progress=progress_cb)
-        # Finalizar
         await progress_msg.edit_text(f"✅ Descarga completada: `{os.path.basename(dest_path)}`")
         return True
-    except Exception as e:
+    except Exception:
         logger.exception("Error en download_with_progress")
         if progress_msg:
             try:
@@ -197,33 +183,25 @@ async def download_with_progress(client: Client, message: Message, dest_path: st
 # -------------------------
 @bot.on_message(filters.private & (filters.document | filters.video | filters.audio | filters.photo))
 async def handle_media(client: Client, message: Message):
-    user = message.from_user
-    user_id = str(user.id)
-    # Validaciones
-    file_size = getattr(message.document or message.video or message.audio or (message.photo and message.photo[-1]), "file_size", 0) or 0
+    user_id = str(message.from_user.id)
+    file_obj = message.document or message.video or message.audio or (message.photo and message.photo[-1])
+    file_size = getattr(file_obj, "file_size", 0) or 0
     if file_size > MAX_FILE_MB * 1024 * 1024:
         await send_short_reply(message, f"❌ Archivo demasiado grande. Límite: {MAX_FILE_MB} MB")
         return
 
-    # Preparar ruta
     user_dir = file_service.get_user_directory(user_id, "downloads")
-    filename = file_service.sanitize_filename(getattr(message.document or message.video or message.audio or (message.photo and message.photo[-1]), "file_name", None) or f"file_{int(time.time())}")
+    filename = file_service.sanitize_filename(getattr(file_obj, "file_name", None) or f"file_{int(time.time())}")
     dest_path = os.path.join(user_dir, filename)
 
-    # Iniciar descarga con semáforo y progreso
     await send_short_reply(message, "⏳ Encolando descarga...")
-
     success = await download_with_progress(client, message, dest_path)
     if not success:
         return
 
-    # Registrar archivo
     file_num = file_service.register_file(user_id, filename, filename, "downloads")
     download_url = file_service.create_download_url(user_id, filename)
-    reply = (
-        f"✅ Archivo guardado como **#{file_num}**\n"
-        f"🔗 Enlace: {download_url}"
-    )
+    reply = f"✅ Archivo guardado como **#{file_num}**\n🔗 Enlace: {download_url}"
     await send_short_reply(message, reply, reply_markup=MAIN_KEYBOARD)
 
 @bot.on_message(filters.command("start") & filters.private)
@@ -258,7 +236,6 @@ async def cmd_pack(client: Client, message: Message):
         if not files:
             await send_short_reply(message, f"❌ {msg}")
             return
-        # Si hay un solo zip
         if len(files) == 1:
             f = files[0]
             await send_short_reply(message, f"✅ Empaquetado listo: `{f['filename']}`\n🔗 {f['url']}")
@@ -276,17 +253,14 @@ def run_flask():
     app.run(host="0.0.0.0", port=PORT, threaded=True)
 
 def main():
-    # Validaciones mínimas
     if not (API_ID and API_HASH and BOT_TOKEN):
         logger.critical("API_ID, API_HASH y BOT_TOKEN deben estar configurados en variables de entorno")
         sys.exit(1)
 
     Path(BASE_DIR).mkdir(parents=True, exist_ok=True)
-    # Iniciar Flask en hilo
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    # Iniciar bot
     logger.info("Iniciando bot de Telegram...")
     bot.run()
 
