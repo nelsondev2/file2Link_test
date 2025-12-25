@@ -53,12 +53,32 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
+# Función para comparar versiones de Python correctamente
+compare_versions() {
+    local required_major required_minor
+    IFS='.' read -r required_major required_minor <<< "$1"
+    
+    local current_major current_minor
+    IFS='.' read -r current_major current_minor <<< "$2"
+    
+    if [[ "$current_major" -lt "$required_major" ]]; then
+        return 1  # Versión menor
+    elif [[ "$current_major" -eq "$required_major" && "$current_minor" -lt "$required_minor" ]]; then
+        return 1  # Mismo major, pero minor menor
+    fi
+    return 0  # Versión OK
+}
+
+# Obtener versión de Python
 PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-if [[ $(echo "$PYTHON_VERSION < 3.8" | bc) -eq 1 ]]; then
+
+# Verificar que sea al menos 3.8
+if compare_versions "3.8" "$PYTHON_VERSION"; then
+    log_success "Python $PYTHON_VERSION detectado (mínimo requerido: 3.8)"
+else
     log_error "Se requiere Python 3.8 o superior. Encontrado: $PYTHON_VERSION"
     exit 1
 fi
-log_success "Python $PYTHON_VERSION detectado"
 
 # Verificar pip
 if ! command -v pip3 &> /dev/null; then
@@ -95,6 +115,14 @@ log_info "🔧 Verificando variables de entorno..."
 REQUIRED_VARS=("BOT_TOKEN" "API_ID" "API_HASH")
 MISSING_VARS=()
 
+# Verificar si estamos en entorno con variables (Render) o si están en .env
+if [[ -f ".env" ]]; then
+    log_info "Cargando variables desde .env file"
+    set -a
+    source .env
+    set +a
+fi
+
 for var in "${REQUIRED_VARS[@]}"; do
     if [[ -z "${!var:-}" ]]; then
         MISSING_VARS+=("$var")
@@ -113,6 +141,7 @@ if [[ ${#MISSING_VARS[@]} -gt 0 ]]; then
         echo "   - $var"
     done
     echo ""
+    echo "O crea un archivo .env con estas variables."
     exit 1
 fi
 
@@ -177,11 +206,11 @@ log_success "Entorno preparado correctamente"
 log_info "📊 Configuración del sistema:"
 echo "   • 🤖 Bot Token: ${BOT_TOKEN:0:10}..."
 echo "   • 🔑 API ID: $API_ID"
-echo "   • 🌐 Puerto: $PORT"
-echo "   • 📏 Máx. archivo: $MAX_FILE_SIZE_MB MB"
-echo "   • ⚡ Buffer descarga: $DOWNLOAD_BUFFER_SIZE bytes"
-echo "   • 🔄 Reintentos: $MAX_RETRIES"
-echo "   • 📦 Máx. parte: $MAX_PART_SIZE_MB MB"
+echo "   • 🌐 Puerto: ${PORT:-8080}"
+echo "   • 📏 Máx. archivo: ${MAX_FILE_SIZE_MB:-2000} MB"
+echo "   • ⚡ Buffer descarga: ${DOWNLOAD_BUFFER_SIZE:-131072} bytes"
+echo "   • 🔄 Reintentos: ${MAX_RETRIES:-3}"
+echo "   • 📦 Máx. parte: ${MAX_PART_SIZE_MB:-200} MB"
 echo "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯"
 
 # ===========================================
