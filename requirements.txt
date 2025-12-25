@@ -1,0 +1,13 @@
+quitale las versiones 
+aiofiles==23.2.1
+Flask==3.0.0
+pyrogram==2.0.106
+TgCrypto==1.2.5
+waitress==3.0.1
+psutil==5.9.6
+python-dotenv==1.0.0
+colorama==0.4.6
+requests==2.31.0
+urllib3==2.0.7
+Pillow==10.1.0
+filetype==1.2.0
