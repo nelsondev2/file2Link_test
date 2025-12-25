@@ -1,0 +1,12 @@
+aiofiles
+Flask
+pyrogram
+TgCrypto
+waitress
+psutil
+python-dotenv
+colorama
+requests
+urllib3
+Pillow
+filetype
