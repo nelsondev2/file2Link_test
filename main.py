@@ -5,7 +5,7 @@ import time
 import sys
 from waitress import serve
 
-from config import BASEDIR, PORT, SYSTEMLOG_FILE
+from config import BASE_DIR, PORT, SYSTEM_LOG_FILE
 from telegram_bot import TelegramBot
 from flask_app import app
 from cleanupservice import cleanupservice
