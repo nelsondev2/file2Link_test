@@ -5,14 +5,14 @@ import json
 import time
 import logging
 import sys
-from config import BASEDIR, RENDERDOMAIN
+from config import BASE_DIR, RENDER_DOMAIN
 
-logger = logging.getLogger(name)
+logger = logging.getLogger(__name__)
 
 class FileService:
-    def init(self):
+    def __init__(self):
         self.file_mappings = {}
-        self.metadatafile = "filemetadata.json"
+        self.metadata_file = "file_metadata.json"
         self.load_metadata()
     
     def load_metadata(self):
@@ -35,14 +35,14 @@ class FileService:
         except Exception as e:
             logger.error(f"Error guardando metadata: {e}")
     
-    def getnextfilenumber(self, userid, file_type="downloads"):
+    def get_next_file_number(self, user_id, file_type="downloads"):
         """Obtiene el siguiente número de archivo para el usuario (PERSISTENTE)"""
-        userkey = f"{userid}{filetype}"
+        user_key = f"{user_id}_{file_type}"
         if user_key not in self.metadata:
-            self.metadata[userkey] = {"nextnumber": 1, "files": {}}
+            self.metadata[user_key] = {"next_number": 1, "files": {}}
         
-        nextnum = self.metadata[userkey]["next_number"]
-        self.metadata[userkey]["nextnumber"] += 1
+        next_num = self.metadata[user_key]["next_number"]
+        self.metadata[user_key]["next_number"] += 1
         self.save_metadata()
         return next_num
     
@@ -64,246 +64,254 @@ class FileService:
             size /= 1024.0
         return f"{size:.1f} TB"
 
-    def createdownloadurl(self, user_id, filename):
+    def create_download_url(self, user_id, filename):
         """Crea una URL de descarga válida"""
-        safefilename = self.sanitizefilename(filename)
-        encodedfilename = urllib.parse.quote(safefilename)
-        return f"{RENDERDOMAIN}/storage/{userid}/downloads/{encoded_filename}"
+        safe_filename = self.sanitize_filename(filename)
+        encoded_filename = urllib.parse.quote(safe_filename)
+        return f"{RENDER_DOMAIN}/storage/{user_id}/downloads/{encoded_filename}"  # ⬅️ CAMBIADO: static → storage
 
-    def createpackedurl(self, user_id, filename):
+    def create_packed_url(self, user_id, filename):
         """Crea una URL para archivos empaquetados"""
-        safefilename = self.sanitizefilename(filename)
-        encodedfilename = urllib.parse.quote(safefilename)
-        return f"{RENDERDOMAIN}/storage/{userid}/packed/{encoded_filename}"
+        safe_filename = self.sanitize_filename(filename)
+        encoded_filename = urllib.parse.quote(safe_filename)
+        return f"{RENDER_DOMAIN}/storage/{user_id}/packed/{encoded_filename}"  # ⬅️ CAMBIADO: static → storage
 
-    def getuserdirectory(self, userid, filetype="downloads"):
+    def get_user_directory(self, user_id, file_type="downloads"):
         """Obtiene el directorio del usuario"""
-        userdir = os.path.join(BASEDIR, str(userid), filetype)
-        os.makedirs(userdir, existok=True)
+        user_dir = os.path.join(BASE_DIR, str(user_id), file_type)  # ⬅️ BASE_DIR ahora es "storage"
+        os.makedirs(user_dir, exist_ok=True)
         return user_dir
 
-    def getuserstorageusage(self, userid):
+    def get_user_storage_usage(self, user_id):
         """Calcula el uso de almacenamiento por usuario"""
-        downloaddir = self.getuserdirectory(userid, "downloads")
-        packeddir = self.getuserdirectory(userid, "packed")
+        download_dir = self.get_user_directory(user_id, "downloads")
+        packed_dir = self.get_user_directory(user_id, "packed")
         
         total_size = 0
-        for directory in [downloaddir, packeddir]:
+        for directory in [download_dir, packed_dir]:
             if not os.path.exists(directory):
                 continue
             for file in os.listdir(directory):
                 file_path = os.path.join(directory, file)
                 if os.path.isfile(file_path):
-                    totalsize += os.path.getsize(filepath)
+                    total_size += os.path.getsize(file_path)
         
         return total_size
 
-    def createfilehash(self, user_id, filename):
+    def create_file_hash(self, user_id, filename):
         """Crea un hash único para el archivo"""
-        data = f"{userid}{filename}_{time.time()}"
+        data = f"{user_id}_{filename}_{time.time()}"
         return hashlib.md5(data.encode()).hexdigest()[:12]
 
-    def listuserfiles(self, userid, filetype="downloads"):
+    def list_user_files(self, user_id, file_type="downloads"):
         """Lista archivos del usuario con numeración PERSISTENTE"""
-        userdir = self.getuserdirectory(userid, file_type)
+        user_dir = self.get_user_directory(user_id, file_type)
         if not os.path.exists(user_dir):
             return []
         
         files = []
-        userkey = f"{userid}{filetype}"
+        user_key = f"{user_id}_{file_type}"
         
         if user_key in self.metadata:
+            # Obtener archivos existentes y ordenar por número
             existing_files = []
-            for filenum, filedata in self.metadata[user_key]["files"].items():
-                filepath = os.path.join(userdir, filedata["storedname"])
+            for file_num, file_data in self.metadata[user_key]["files"].items():
+                file_path = os.path.join(user_dir, file_data["stored_name"])
                 if os.path.exists(file_path):
-                    existingfiles.append((int(filenum), file_data))
+                    existing_files.append((int(file_num), file_data))
             
+            # Ordenar por número (NO reasignar números)
             existing_files.sort(key=lambda x: x[0])
             
-            for filenumber, filedata in existing_files:
-                filepath = os.path.join(userdir, filedata["storedname"])
+            for file_number, file_data in existing_files:
+                file_path = os.path.join(user_dir, file_data["stored_name"])
                 if os.path.isfile(file_path):
                     size = os.path.getsize(file_path)
                     if file_type == "downloads":
-                        downloadurl = self.createdownloadurl(userid, filedata["storedname"])
+                        download_url = self.create_download_url(user_id, file_data["stored_name"])
                     else:
-                        downloadurl = self.createpackedurl(userid, filedata["storedname"])
+                        download_url = self.create_packed_url(user_id, file_data["stored_name"])
                     
                     files.append({
                         'number': file_number,
-                        'name': filedata["originalname"],
-                        'storedname': filedata["stored_name"],
+                        'name': file_data["original_name"],
+                        'stored_name': file_data["stored_name"],
                         'size': size,
                         'size_mb': size / (1024 * 1024),
                         'url': download_url,
-                        'filetype': filetype
+                        'file_type': file_type
                     })
         
         return files
 
-    def registerfile(self, userid, originalname, storedname, file_type="downloads"):
-        """Registra un archivo en la metadata con número PERSISTENTE"""
-        userkey = f"{userid}{filetype}"
+    def register_file(self, user_id, original_name, stored_name, file_type="downloads"):
+        """Registra un archivo en la metadata con número PERSISTENTE - CORREGIDO"""
+        user_key = f"{user_id}_{file_type}"
         if user_key not in self.metadata:
-            self.metadata[userkey] = {"nextnumber": 1, "files": {}}
+            self.metadata[user_key] = {"next_number": 1, "files": {}}
         
-        filenum = self.metadata[userkey]["next_number"]
-        self.metadata[userkey]["nextnumber"] += 1
+        # CORREGIDO: Usar el número actual SIN restar 1
+        file_num = self.metadata[user_key]["next_number"]
+        self.metadata[user_key]["next_number"] += 1
         
-        self.metadata[userkey]["files"][str(filenum)] = {
-            "originalname": originalname,
-            "storedname": storedname,
+        self.metadata[user_key]["files"][str(file_num)] = {
+            "original_name": original_name,
+            "stored_name": stored_name,
             "registered_at": time.time()
         }
         self.save_metadata()
         
-        logger.info(f"✅ Archivo registrado: #{filenum} - {originalname} para usuario {user_id}")
+        logger.info(f"✅ Archivo registrado: #{file_num} - {original_name} para usuario {user_id}")
         return file_num
 
-    def getfilebynumber(self, userid, filenumber, filetype="downloads"):
+    def get_file_by_number(self, user_id, file_number, file_type="downloads"):
         """Obtiene información de archivo por número (PERSISTENTE)"""
-        userkey = f"{userid}{filetype}"
+        user_key = f"{user_id}_{file_type}"
         if user_key not in self.metadata:
             return None
         
-        filedata = self.metadata[userkey]["files"].get(str(file_number))
+        file_data = self.metadata[user_key]["files"].get(str(file_number))
         if not file_data:
             return None
         
-        userdir = self.getuserdirectory(userid, file_type)
-        filepath = os.path.join(userdir, filedata["storedname"])
+        user_dir = self.get_user_directory(user_id, file_type)
+        file_path = os.path.join(user_dir, file_data["stored_name"])
         
         if not os.path.exists(file_path):
             return None
         
         if file_type == "downloads":
-            downloadurl = self.createdownloadurl(userid, filedata["storedname"])
+            download_url = self.create_download_url(user_id, file_data["stored_name"])
         else:
-            downloadurl = self.createpackedurl(userid, filedata["storedname"])
+            download_url = self.create_packed_url(user_id, file_data["stored_name"])
         
         return {
             'number': file_number,
-            'originalname': filedata["original_name"],
-            'storedname': filedata["stored_name"],
+            'original_name': file_data["original_name"],
+            'stored_name': file_data["stored_name"],
             'path': file_path,
             'url': download_url,
-            'filetype': filetype
+            'file_type': file_type
         }
 
-    def getoriginalfilename(self, userid, storedfilename, file_type="downloads"):
+    def get_original_filename(self, user_id, stored_filename, file_type="downloads"):
         """Obtiene el nombre original del archivo basado en el nombre almacenado"""
-        userkey = f"{userid}{filetype}"
+        user_key = f"{user_id}_{file_type}"
         if user_key not in self.metadata:
             return stored_filename
         
-        for filedata in self.metadata[userkey]["files"].values():
-            if filedata["storedname"] == stored_filename:
-                return filedata["originalname"]
+        for file_data in self.metadata[user_key]["files"].values():
+            if file_data["stored_name"] == stored_filename:
+                return file_data["original_name"]
         
         return stored_filename
 
-    def renamefile(self, userid, filenumber, newname, file_type="downloads"):
+    def rename_file(self, user_id, file_number, new_name, file_type="downloads"):
         """Renombra un archivo"""
         try:
-            userkey = f"{userid}{filetype}"
+            user_key = f"{user_id}_{file_type}"
             if user_key not in self.metadata:
-                return False, "Usuario no encontrado", None
+                return False, "Usuario no encontrado"
             
-            fileinfo = self.getfilebynumber(userid, filenumber, file_type)
+            file_info = self.get_file_by_number(user_id, file_number, file_type)
             if not file_info:
-                return False, "Archivo no encontrado", None
+                return False, "Archivo no encontrado"
             
-            filedata = self.metadata[userkey]["files"].get(str(file_number))
+            file_data = self.metadata[user_key]["files"].get(str(file_number))
             if not file_data:
-                return False, "Archivo no encontrado en metadata", None
+                return False, "Archivo no encontrado en metadata"
             
-            newname = self.sanitizefilename(new_name)
+            new_name = self.sanitize_filename(new_name)
             
-            userdir = self.getuserdirectory(userid, file_type)
-            oldpath = os.path.join(userdir, filedata["storedname"])
+            user_dir = self.get_user_directory(user_id, file_type)
+            old_path = os.path.join(user_dir, file_data["stored_name"])
             
             if not os.path.exists(old_path):
-                return False, "Archivo físico no encontrado", None
+                return False, "Archivo físico no encontrado"
             
-            , ext = os.path.splitext(filedata["stored_name"])
-            newstoredname = new_name + ext
+            _, ext = os.path.splitext(file_data["stored_name"])
+            new_stored_name = new_name + ext
             
             counter = 1
-            basenewstoredname = newstored_name
-            while os.path.exists(os.path.join(userdir, newstored_name)):
-                namenoext = os.path.splitext(basenewstored_name)[0]
-                ext = os.path.splitext(basenewstored_name)[1]
-                newstoredname = f"{namenoext}_{counter}{ext}"
+            base_new_stored_name = new_stored_name
+            while os.path.exists(os.path.join(user_dir, new_stored_name)):
+                name_no_ext = os.path.splitext(base_new_stored_name)[0]
+                ext = os.path.splitext(base_new_stored_name)[1]
+                new_stored_name = f"{name_no_ext}_{counter}{ext}"
                 counter += 1
             
-            newpath = os.path.join(userdir, newstoredname)
+            new_path = os.path.join(user_dir, new_stored_name)
             
-            os.rename(oldpath, newpath)
+            os.rename(old_path, new_path)
             
-            filedata["originalname"] = new_name
-            filedata["storedname"] = newstoredname
+            file_data["original_name"] = new_name
+            file_data["stored_name"] = new_stored_name
             self.save_metadata()
             
             if file_type == "downloads":
-                newurl = self.createdownloadurl(userid, newstoredname)
+                new_url = self.create_download_url(user_id, new_stored_name)
             else:
-                newurl = self.createpackedurl(userid, newstoredname)
+                new_url = self.create_packed_url(user_id, new_stored_name)
             
-            return True, f"Archivo renombrado a: {newname}", newurl
+            return True, f"Archivo renombrado a: {new_name}", new_url
             
         except Exception as e:
             logger.error(f"Error renombrando archivo: {e}")
             return False, f"Error al renombrar: {str(e)}", None
 
-    def deletefilebynumber(self, userid, filenumber, filetype="downloads"):
-        """Elimina un archivo por número y reasigna números"""
+    def delete_file_by_number(self, user_id, file_number, file_type="downloads"):
+        """Elimina un archivo por número y REASIGNA números"""
         try:
-            userkey = f"{userid}{filetype}"
+            user_key = f"{user_id}_{file_type}"
             if user_key not in self.metadata:
                 return False, "Usuario no encontrado"
             
-            fileinfo = self.getfilebynumber(userid, filenumber, file_type)
+            file_info = self.get_file_by_number(user_id, file_number, file_type)
             if not file_info:
                 return False, "Archivo no encontrado"
             
-            filedata = self.metadata[userkey]["files"].get(str(file_number))
+            file_data = self.metadata[user_key]["files"].get(str(file_number))
             if not file_data:
                 return False, "Archivo no encontrado en metadata"
             
-            userdir = self.getuserdirectory(userid, file_type)
-            filepath = os.path.join(userdir, filedata["storedname"])
+            user_dir = self.get_user_directory(user_id, file_type)
+            file_path = os.path.join(user_dir, file_data["stored_name"])
             
             if os.path.exists(file_path):
                 os.remove(file_path)
             
-            del self.metadata[userkey]["files"][str(filenumber)]
+            # ELIMINAR la entrada de metadata y REASIGNAR números
+            del self.metadata[user_key]["files"][str(file_number)]
             
+            # Reasignar números consecutivos
             remaining_files = sorted(
                 [(int(num), data) for num, data in self.metadata[user_key]["files"].items()],
                 key=lambda x: x[0]
             )
             
+            # Resetear metadata
             self.metadata[user_key]["files"] = {}
             
+            # Reasignar números comenzando desde 1
             new_number = 1
-            for oldnum, filedata in remaining_files:
-                self.metadata[userkey]["files"][str(newnumber)] = file_data
+            for old_num, file_data in remaining_files:
+                self.metadata[user_key]["files"][str(new_number)] = file_data
                 new_number += 1
             
-            self.metadata[userkey]["nextnumber"] = new_number
+            # Actualizar next_number
+            self.metadata[user_key]["next_number"] = new_number
             self.save_metadata()
             
-            return True, f"Archivo #{filenumber} '{filedata['original_name']}' eliminado y números reasignados"
+            return True, f"Archivo #{file_number} '{file_data['original_name']}' eliminado y números reasignados"
             
         except Exception as e:
             logger.error(f"Error eliminando archivo: {e}")
             return False, f"Error al eliminar archivo: {str(e)}"
 
-    def deleteallfiles(self, userid, filetype="downloads"):
+    def delete_all_files(self, user_id, file_type="downloads"):
         """Elimina todos los archivos del usuario de un tipo específico"""
         try:
-            userdir = self.getuserdirectory(userid, file_type)
+            user_dir = self.get_user_directory(user_id, file_type)
             
             if not os.path.exists(user_dir):
                 return False, f"No hay archivos {file_type} para eliminar"
@@ -314,17 +322,18 @@ class FileService:
             
             deleted_count = 0
             for filename in files:
-                filepath = os.path.join(userdir, filename)
+                file_path = os.path.join(user_dir, filename)
                 if os.path.isfile(file_path):
                     os.remove(file_path)
                     deleted_count += 1
             
-            userkey = f"{userid}{filetype}"
+            # Resetear metadata para este tipo de archivo
+            user_key = f"{user_id}_{file_type}"
             if user_key in self.metadata:
-                self.metadata[userkey] = {"nextnumber": 1, "files": {}}
+                self.metadata[user_key] = {"next_number": 1, "files": {}}
                 self.save_metadata()
             
-            return True, f"Se eliminaron {deletedcount} archivos {filetype} y se resetearon los números"
+            return True, f"Se eliminaron {deleted_count} archivos {file_type} y se resetearon los números"
             
         except Exception as e:
             logger.error(f"Error eliminando todos los archivos: {e}")
