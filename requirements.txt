@@ -6,4 +6,3 @@ waitress
 psutil
 motor
 pymongo
-videojs
