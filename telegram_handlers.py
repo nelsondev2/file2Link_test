@@ -606,8 +606,7 @@ async def pack_command(client, message):
             for file_info in files:
                 response_text += f"\n\n**Parte {file_info['number']}:** ⬇️ [{file_info['filename']}]({file_info['url']})"
             
-            response_text += "\n\n📁 **Para ver los archivos:**
-`/cd packed` y luego `/list`"
+            response_text += "\n\n📁 **Para ver los archivos:**\n`/cd packed` y luego `/list`"
             
             if len(response_text) > 4000:
                 await status_msg.edit_text(
