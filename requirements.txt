@@ -1,0 +1,9 @@
+aiofiles
+Flask
+pyrogram
+TgCrypto
+waitress
+psutil
+motor
+pymongo
+videojs
