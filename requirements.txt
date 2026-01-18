@@ -1,6 +1,0 @@
-aiofiles
-Flask
-pyrogram
-TgCrypto
-waitress
-psutil
