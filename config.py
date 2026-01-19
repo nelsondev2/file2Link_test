@@ -27,17 +27,44 @@ CHUNK_SIZE = 65536
 
 # ===== NUEVAS CONFIGURACIONES =====
 # Administración
-OWNER_ID = os.getenv("OWNER_ID", "").split(",")
-OWNER_ID = [int(x.strip()) for x in OWNER_ID if x.strip().isdigit()]
+OWNER_IDS = os.getenv("OWNER_IDS", "").split(",")
+OWNER_IDS = [int(x.strip()) for x in OWNER_IDS if x.strip().isdigit()]
 
 # Canal para logs (como primer bot)
 BIN_CHANNEL = os.getenv("BIN_CHANNEL", None)
 
 # Hash security
 HASH_SALT = os.getenv("HASH_SALT", "nelson_file2link_secure_salt")
-HASH_EXPIRE_DAYS = 30
+HASH_EXPIRE_DAYS = int(os.getenv("HASH_EXPIRE_DAYS", "30"))  # ⬅️ CONVERTIR A INT
 
 # Queue limits
 MAX_QUEUE_SIZE = 20
 MAX_CONCURRENT_UPLOADS = 2
 QUEUE_PROCESSING_TIMEOUT = 3600
+
+# ===== VALIDACIÓN =====
+def validate_config():
+    """Validar configuración crítica"""
+    errors = []
+    
+    if not BOT_TOKEN or BOT_TOKEN == "tu_bot_token":
+        errors.append("BOT_TOKEN no configurado")
+    
+    if not API_ID or API_ID == 12345678:
+        errors.append("API_ID no configurado")
+    
+    if not API_HASH or API_HASH == "tu_api_hash":
+        errors.append("API_HASH no configurado")
+    
+    if not RENDER_DOMAIN or "example.com" in RENDER_DOMAIN:
+        errors.append("RENDER_DOMAIN no configurado correctamente")
+    
+    return errors
+
+# Validar al importar
+config_errors = validate_config()
+if config_errors:
+    print("⚠️ ADVERTENCIA: Errores en configuración:")
+    for error in config_errors:
+        print(f"  • {error}")
+    print("\nConfigura las variables en Render.com → Environment Variables")
