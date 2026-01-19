@@ -1,13 +1,15 @@
 import os
 import time
+import urllib.parse  # ⬅️ AÑADIDO: Import faltante
+import logging
 from flask import Flask, send_from_directory, jsonify, render_template_string, request, send_file
 from werkzeug.utils import safe_join
 
-from config import BASE_DIR, RENDER_DOMAIN, MAX_FILE_SIZE_MB
+from config import BASE_DIR, RENDER_DOMAIN, MAX_FILE_SIZE_MB, HASH_EXPIRE_DAYS  # ⬅️ AÑADIDO: HASH_EXPIRE_DAYS
 from load_manager import load_manager
 from file_service import file_service
 
-app = Flask(__name__)
+logger = logging.getLogger(__name__)
 
 def get_directory_structure(startpath):
     """Genera la estructura de directorios similar a la imagen"""
@@ -442,7 +444,7 @@ def home():
                 <p><strong>Antes (vulnerable):</strong> <code>https://dominio.com/storage/12345/downloads/file.zip</code></p>
                 <p><strong>Ahora (seguro):</strong> <code>https://dominio.com/download/abc123def456?file=archivo.zip</code></p>
                 <p>• Cada URL tiene hash único de 12 caracteres</p>
-                <p>• Los hashes expiran después de {file_service.HASH_EXPIRE_DAYS} días</p>
+                <p>• Los hashes expiran después de {HASH_EXPIRE_DAYS} días</p>  <!-- ⬅️ CORREGIDO: file_service.HASH_EXPIRE_DAYS → HASH_EXPIRE_DAYS -->
                 <p>• Imposible adivinar URLs de otros usuarios</p>
                 <p>• Sistema idéntico al primer bot profesional</p>
 
@@ -472,7 +474,7 @@ Comandos: /queue, /clearqueue, /status mejorado</div>
 
                 <h3>📏 Especificaciones Técnicas Mejoradas:</h3>
                 <div class="code">Tamaño máximo por archivo: {MAX_FILE_SIZE_MB} MB
-Hash de seguridad: 12 caracteres, {file_service.HASH_EXPIRE_DAYS} días de validez
+Hash de seguridad: 12 caracteres, {HASH_EXPIRE_DAYS} días de validez  <!-- ⬅️ CORREGIDO -->
 Usuarios: Sistema completo de registro y estadísticas
 Base de datos: JSON optimizado para bajos recursos
 Concurrencia: 1 proceso principal, 2 subidas simultáneas</div>
@@ -485,8 +487,8 @@ Concurrencia: 1 proceso principal, 2 subidas simultáneas</div>
 /system-status - Estado detallado del sistema
 /api/stats - Estadísticas en JSON
 /files - Explorador de archivos del servidor
-/download/{hash}?file=nombre - Descargar archivo seguro
-/packed/{hash}?file=nombre - Descargar archivo empaquetado</div>
+/download/{{hash}}?file=nombre - Descargar archivo seguro
+/packed/{{hash}}?file=nombre - Descargar archivo empaquetado</div>
                 
                 <h3>🔧 Características Técnicas Avanzadas</h3>
                 <p><strong>Arquitectura:</strong> Bot de Telegram + Servidor Web Flask + Sistema de Hash</p>
@@ -568,7 +570,7 @@ def system_status():
         },
         "security": {
             "hash_enabled": True,
-            "hash_expire_days": file_service.HASH_EXPIRE_DAYS,
+            "hash_expire_days": HASH_EXPIRE_DAYS,  # ⬅️ CORREGIDO
             "url_protection": "enabled"
         },
         "system_load": status,
@@ -633,7 +635,7 @@ def api_stats():
             "active_hashes": len(file_service.file_hashes),
             "expired_cleaned": expired_cleaned,
             "hash_system": "md5_12chars",
-            "expire_days": file_service.HASH_EXPIRE_DAYS
+            "expire_days": HASH_EXPIRE_DAYS  # ⬅️ CORREGIDO
         },
         "system": {
             "uptime": load_manager.get_status().get('uptime', 0),
