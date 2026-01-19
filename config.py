@@ -27,8 +27,8 @@ CHUNK_SIZE = 65536
 
 # ===== NUEVAS CONFIGURACIONES =====
 # Administración
-OWNER_IDS = os.getenv("OWNER_IDS", "").split(",")
-OWNER_IDS = [int(x.strip()) for x in OWNER_IDS if x.strip().isdigit()]
+OWNER_ID = os.getenv("OWNER_ID", "").split(",")
+OWNER_ID = [int(x.strip()) for x in OWNER_ID if x.strip().isdigit()]
 
 # Canal para logs (como primer bot)
 BIN_CHANNEL = os.getenv("BIN_CHANNEL", None)
