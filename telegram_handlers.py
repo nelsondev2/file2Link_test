@@ -9,7 +9,7 @@ from collections import deque
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
-from config import OWNER_IDS, BIN_CHANNEL, MAX_QUEUE_SIZE, MAX_CONCURRENT_UPLOADS, MAX_FILE_SIZE, MAX_FILE_SIZE_MB
+from config import OWNER_ID, BIN_CHANNEL, MAX_QUEUE_SIZE, MAX_CONCURRENT_UPLOADS, MAX_FILE_SIZE, MAX_FILE_SIZE_MB
 from load_manager import load_manager
 from file_service import file_service
 from progress_service import progress_service
