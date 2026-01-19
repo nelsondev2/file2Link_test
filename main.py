@@ -7,7 +7,7 @@ from waitress import serve
 
 from config import BASE_DIR, PORT
 from telegram_bot import TelegramBot
-from flask_app import app
+from flask_app import app  # ⬅️ Asegúrate que sea flask_app (no flask_app.py)
 
 # ===== LOGGING =====
 logging.basicConfig(
