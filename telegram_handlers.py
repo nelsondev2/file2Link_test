@@ -16,7 +16,8 @@ from file_service import file_service
 from progress_service import progress_service
 from packing_service import packing_service
 from download_service import fast_download_service
-from filename_utils import safe_filename, clean_for_filesystem, clean_for_url  # NUEVO IMPORT
+from filename_utils import safe_filename, clean_for_filesystem, clean_for_url
+from telegram_db import telegram_db  # NUEVO IMPORT
 
 logger = logging.getLogger(__name__)
 
@@ -104,22 +105,25 @@ async def users_command(client, message):
     try:
         user_id = message.from_user.id
         
-        # Registrar usuario primero
-        if not file_service.is_user_exist(user_id):
-            file_service.add_user(user_id, message.from_user.first_name)
+        # Registrar usuario primero (async)
+        if not await file_service.is_user_exist_async(user_id):
+            await file_service.add_user_async(user_id, message.from_user.first_name)
         
         # Verificar si es owner
         if user_id not in OWNER_ID:
             await message.reply_text("❌ Este comando es solo para administradores.")
             return
         
-        total_users = file_service.total_users_count()
+        total_users = await file_service.total_users_count_async()
         
         # Obtener usuarios recientes
+        all_users = await file_service.get_all_users_async()
         recent_users = []
-        for uid, user_data in file_service.users.items():
+        current_time = time.time()
+        
+        for user_data in all_users:
             if 'last_seen' in user_data:
-                if time.time() - user_data['last_seen'] < 7 * 24 * 3600:  # Últimos 7 días
+                if current_time - user_data['last_seen'] < 7 * 24 * 3600:  # Últimos 7 días
                     recent_users.append(user_data)
         
         response = f"""👥 **ESTADÍSTICAS DE USUARIOS**
@@ -132,18 +136,18 @@ async def users_command(client, message):
         
         # Ordenar por último acceso
         sorted_users = sorted(
-            list(file_service.users.values()),
+            all_users,
             key=lambda x: x.get('last_seen', 0),
             reverse=True
         )[:5]
         
         for i, user in enumerate(sorted_users, 1):
-            user_id = user.get('id', 'N/A')
+            user_id_val = user.get('user_id', user.get('id', 'N/A'))
             first_name = user.get('first_name', 'Desconocido')
             last_seen = user.get('last_seen', 0)
             
             if last_seen > 0:
-                time_ago = time.time() - last_seen
+                time_ago = current_time - last_seen
                 if time_ago < 3600:
                     last_seen_str = f"{int(time_ago/60)} min"
                 elif time_ago < 86400:
@@ -155,7 +159,7 @@ async def users_command(client, message):
             
             files_count = user.get('files_count', 0)
             
-            response += f"{i}. **{first_name}** (`{user_id}`) - {files_count} archivos - Visto: {last_seen_str}\n"
+            response += f"{i}. **{first_name}** (`{user_id_val}`) - {files_count} archivos - Visto: {last_seen_str}\n"
         
         response += f"\n**Comando:** `/broadcast` para enviar mensaje a todos"
         
@@ -179,9 +183,9 @@ async def broadcast_command(client, message):
     try:
         user_id = message.from_user.id
         
-        # Registrar usuario primero
-        if not file_service.is_user_exist(user_id):
-            file_service.add_user(user_id, message.from_user.first_name)
+        # Registrar usuario primero (async)
+        if not await file_service.is_user_exist_async(user_id):
+            await file_service.add_user_async(user_id, message.from_user.first_name)
         
         # Verificar si es owner
         if user_id not in OWNER_ID:
@@ -201,7 +205,7 @@ async def broadcast_command(client, message):
             "Este proceso puede tardar varios minutos..."
         )
         
-        all_users = file_service.get_all_users()
+        all_users = await file_service.get_all_users_async()
         broadcast_msg = message.reply_to_message
         
         start_time = time.time()
@@ -219,10 +223,10 @@ async def broadcast_command(client, message):
             
             for user in batch:
                 try:
-                    user_id = user['id']
-                    await broadcast_msg.copy(chat_id=user_id)
+                    user_id_to_send = user.get('user_id', user.get('id'))
+                    await broadcast_msg.copy(chat_id=user_id_to_send)
                     success += 1
-                    log_text += f"{user_id}: ✅ Enviado\n"
+                    log_text += f"{user_id_to_send}: ✅ Enviado\n"
                 except Exception as e:
                     failed += 1
                     error_msg = str(e)
@@ -231,9 +235,9 @@ async def broadcast_command(client, message):
                     elif "user deactivated" in error_msg.lower():
                         error_msg = "Usuario desactivado"
                         # Eliminar usuario desactivado
-                        file_service.delete_user(user_id)
+                        await file_service._delete_user_async(user_id_to_send)
                     
-                    log_text += f"{user_id}: ❌ {error_msg[:50]}\n"
+                    log_text += f"{user_id_to_send}: ❌ {error_msg[:50]}\n"
                 
                 done += 1
             
@@ -300,25 +304,27 @@ async def stats_command(client, message):
     try:
         user_id = message.from_user.id
         
-        # Registrar usuario primero
-        if not file_service.is_user_exist(user_id):
-            file_service.add_user(user_id, message.from_user.first_name)
+        # Registrar usuario primero (async)
+        if not await file_service.is_user_exist_async(user_id):
+            await file_service.add_user_async(user_id, message.from_user.first_name)
         
         system_status = load_manager.get_status()
         download_stats = fast_download_service.get_stats()
-        total_users = file_service.total_users_count()
+        total_users = await file_service.total_users_count_async()
         
-        # Calcular estadísticas de archivos
+        # Calcular estadísticas de archivos (aproximado para Telegram DB)
+        all_users = await file_service.get_all_users_async()
+        
         total_files = 0
         total_size = 0
-        for uid in file_service.users:
-            user_id_int = int(uid)
-            downloads = len(file_service.list_user_files(user_id_int, "downloads"))
-            packed = len(file_service.list_user_files(user_id_int, "packed"))
-            total_files += downloads + packed
+        for user in all_users:
+            files_count = user.get('files_count', 0)
+            total_files += files_count
             
-            user_size = file_service.get_user_storage_usage(user_id_int)
-            total_size += user_size
+            # Para tamaño, estimar basado en archivos
+            # Cada archivo promedio ~10MB
+            estimated_size = files_count * 10 * 1024 * 1024
+            total_size += estimated_size
         
         # Estadísticas globales
         uptime_seconds = time.time() - global_stats['start_time']
@@ -330,8 +336,8 @@ async def stats_command(client, message):
 
 👥 **USUARIOS:**
 • **Total registrados:** {total_users}
-• **Archivos totales:** {total_files}
-• **Espacio total usado:** {load_manager.get_readable_file_size(total_size)}
+• **Archivos totales (estimado):** {total_files}
+• **Espacio usado (estimado):** {load_manager.get_readable_file_size(total_size)}
 
 💾 **ALMACENAMIENTO:**
 • **CPU:** {system_status['cpu_percent']:.1f}%
@@ -365,8 +371,9 @@ async def about_command(client, message):
     try:
         user_id = message.from_user.id
         
-        if not file_service.is_user_exist(user_id):
-            file_service.add_user(user_id, message.from_user.first_name)
+        # Registrar usuario primero (async)
+        if not await file_service.is_user_exist_async(user_id):
+            await file_service.add_user_async(user_id, message.from_user.first_name)
         
         about_text = f"""🤖 **Bot de Archivos**
 
@@ -396,8 +403,8 @@ async def start_command(client, message):
     try:
         user = message.from_user
         
-        # Registrar usuario
-        is_new = file_service.add_user(user.id, user.first_name)
+        # Registrar usuario (async)
+        is_new = await file_service.add_user_async(user.id, user.first_name)
         
         if is_new:
             # Enviar a bin channel si está configurado
@@ -450,8 +457,9 @@ async def help_command(client, message):
     try:
         user_id = message.from_user.id
         
-        if not file_service.is_user_exist(user_id):
-            file_service.add_user(user_id, message.from_user.first_name)
+        # Registrar usuario primero (async)
+        if not await file_service.is_user_exist_async(user_id):
+            await file_service.add_user_async(user_id, message.from_user.first_name)
         
         help_text = f"""📚 **COMANDOS DISPONIBLES**
 
@@ -497,8 +505,9 @@ async def cd_command(client, message):
     try:
         user_id = message.from_user.id
         
-        if not file_service.is_user_exist(user_id):
-            file_service.add_user(user_id, message.from_user.first_name)
+        # Registrar usuario primero (async)
+        if not await file_service.is_user_exist_async(user_id):
+            await file_service.add_user_async(user_id, message.from_user.first_name)
         
         session = get_user_session(user_id)
         args = message.text.split()
@@ -529,8 +538,9 @@ async def list_command(client, message):
     try:
         user_id = message.from_user.id
         
-        if not file_service.is_user_exist(user_id):
-            file_service.add_user(user_id, message.from_user.first_name)
+        # Registrar usuario primero (async)
+        if not await file_service.is_user_exist_async(user_id):
+            await file_service.add_user_async(user_id, message.from_user.first_name)
         
         session = get_user_session(user_id)
         current_folder = session['current_folder']
@@ -543,7 +553,8 @@ async def list_command(client, message):
             except ValueError:
                 page = 1
         
-        files = file_service.list_user_files(user_id, current_folder)
+        # Obtener archivos (async)
+        files = await file_service.list_user_files_async(user_id, current_folder)
         
         if not files:
             await message.reply_text(
@@ -567,8 +578,6 @@ async def list_command(client, message):
         files_text += f"**Total de archivos:** {len(files)}\n\n"
         
         for file_info in page_files:
-            # Mostrar hash en la URL (primeros 8 caracteres)
-            url_hash = file_info['url'].split('/')[-1].split('?')[0][:8]
             files_text += f"**#{file_info['number']}** - `{file_info['name']}`\n"
             files_text += f"📏 **Tamaño:** {file_info['size_mb']:.1f} MB\n"
             files_text += f"🔗 **Enlace:** [Descargar]({file_info['url']})\n\n"
@@ -616,8 +625,9 @@ async def delete_command(client, message):
     try:
         user_id = message.from_user.id
         
-        if not file_service.is_user_exist(user_id):
-            file_service.add_user(user_id, message.from_user.first_name)
+        # Registrar usuario primero (async)
+        if not await file_service.is_user_exist_async(user_id):
+            await file_service.add_user_async(user_id, message.from_user.first_name)
         
         session = get_user_session(user_id)
         current_folder = session['current_folder']
@@ -638,7 +648,8 @@ async def delete_command(client, message):
             await message.reply_text("❌ El número debe ser un valor numérico válido.")
             return
         
-        success, result_message = file_service.delete_file_by_number(user_id, file_number, current_folder)
+        # Eliminar archivo (async)
+        success, result_message = await file_service.delete_file_by_number_async(user_id, file_number, current_folder)
         
         if success:
             await message.reply_text(f"✅ **{result_message}**")
@@ -663,13 +674,15 @@ async def clear_command(client, message):
     try:
         user_id = message.from_user.id
         
-        if not file_service.is_user_exist(user_id):
-            file_service.add_user(user_id, message.from_user.first_name)
+        # Registrar usuario primero (async)
+        if not await file_service.is_user_exist_async(user_id):
+            await file_service.add_user_async(user_id, message.from_user.first_name)
         
         session = get_user_session(user_id)
         current_folder = session['current_folder']
         
-        success, result_message = file_service.delete_all_files(user_id, current_folder)
+        # Vaciar carpeta (async)
+        success, result_message = await file_service.delete_all_files_async(user_id, current_folder)
         
         if success:
             await message.reply_text(f"✅ **{result_message}**")
@@ -693,8 +706,9 @@ async def rename_command(client, message):
     try:
         user_id = message.from_user.id
         
-        if not file_service.is_user_exist(user_id):
-            file_service.add_user(user_id, message.from_user.first_name)
+        # Registrar usuario primero (async)
+        if not await file_service.is_user_exist_async(user_id):
+            await file_service.add_user_async(user_id, message.from_user.first_name)
         
         session = get_user_session(user_id)
         current_folder = session['current_folder']
@@ -721,7 +735,8 @@ async def rename_command(client, message):
             await message.reply_text("❌ El nuevo nombre no puede estar vacío.")
             return
         
-        success, result_message, new_url = file_service.rename_file(user_id, file_number, new_name, current_folder)
+        # Renombrar archivo (async)
+        success, result_message, new_url = await file_service.rename_file_async(user_id, file_number, new_name, current_folder)
         
         if success:
             response_text = f"✅ **{result_message}**\n\n"
@@ -752,13 +767,15 @@ async def status_command(client, message):
     try:
         user_id = message.from_user.id
         
-        if not file_service.is_user_exist(user_id):
-            file_service.add_user(user_id, message.from_user.first_name)
+        # Registrar usuario primero (async)
+        if not await file_service.is_user_exist_async(user_id):
+            await file_service.add_user_async(user_id, message.from_user.first_name)
         
         session = get_user_session(user_id)
         
-        downloads_count = len(file_service.list_user_files(user_id, "downloads"))
-        packed_count = len(file_service.list_user_files(user_id, "packed"))
+        # Obtener archivos (async)
+        downloads_count = len(await file_service.list_user_files_async(user_id, "downloads"))
+        packed_count = len(await file_service.list_user_files_async(user_id, "packed"))
         total_size = file_service.get_user_storage_usage(user_id)
         size_mb = total_size / (1024 * 1024)
         
@@ -794,8 +811,9 @@ async def pack_command(client, message):
     try:
         user_id = message.from_user.id
         
-        if not file_service.is_user_exist(user_id):
-            file_service.add_user(user_id, message.from_user.first_name)
+        # Registrar usuario primero (async)
+        if not await file_service.is_user_exist_async(user_id):
+            await file_service.add_user_async(user_id, message.from_user.first_name)
         
         command_parts = message.text.split()
         
@@ -917,8 +935,9 @@ async def queue_command(client, message):
     try:
         user_id = message.from_user.id
         
-        if not file_service.is_user_exist(user_id):
-            file_service.add_user(user_id, message.from_user.first_name)
+        # Registrar usuario primero (async)
+        if not await file_service.is_user_exist_async(user_id):
+            await file_service.add_user_async(user_id, message.from_user.first_name)
         
         if user_id not in user_queues or not user_queues[user_id]:
             await message.reply_text("📭 **Cola vacía**\n\nNo hay archivos en cola de descarga.")
@@ -974,8 +993,9 @@ async def clear_queue_command(client, message):
     try:
         user_id = message.from_user.id
         
-        if not file_service.is_user_exist(user_id):
-            file_service.add_user(user_id, message.from_user.first_name)
+        # Registrar usuario primero (async)
+        if not await file_service.is_user_exist_async(user_id):
+            await file_service.add_user_async(user_id, message.from_user.first_name)
         
         if user_id not in user_queues or not user_queues[user_id]:
             await message.reply_text("📭 **Cola ya está vacía**")
@@ -1009,20 +1029,22 @@ async def cleanup_command(client, message):
     try:
         user_id = message.from_user.id
         
-        if not file_service.is_user_exist(user_id):
-            file_service.add_user(user_id, message.from_user.first_name)
+        # Registrar usuario primero (async)
+        if not await file_service.is_user_exist_async(user_id):
+            await file_service.add_user_async(user_id, message.from_user.first_name)
         
         status_msg = await message.reply_text("🧹 **Limpiando y optimizando sistema...**")
         
-        # Limpiar hashes expirados
-        expired_count = file_service.cleanup_expired_hashes()
+        # Limpiar hashes expirados (async)
+        expired_count = await file_service.cleanup_expired_hashes_async()
         
         # Obtener estadísticas del usuario
         total_size = file_service.get_user_storage_usage(user_id)
         size_mb = total_size / (1024 * 1024)
         
-        downloads_count = len(file_service.list_user_files(user_id, "downloads"))
-        packed_count = len(file_service.list_user_files(user_id, "packed"))
+        # Obtener archivos (async)
+        downloads_count = len(await file_service.list_user_files_async(user_id, "downloads"))
+        packed_count = len(await file_service.list_user_files_async(user_id, "packed"))
         
         await status_msg.edit_text(
             f"✅ **Limpieza completada**\n\n"
@@ -1044,8 +1066,8 @@ async def handle_file(client, message):
         user = message.from_user
         user_id = user.id
 
-        # Registrar usuario primero
-        is_new_user = file_service.add_user(user_id, user.first_name)
+        # Registrar usuario primero (async)
+        is_new_user = await file_service.add_user_async(user_id, user.first_name)
         if is_new_user:
             update_global_stats(users_served=1)
         
@@ -1161,7 +1183,7 @@ async def process_file_queue(client, user_id):
             del user_batch_totals[user_id]
 
 async def process_single_file(client, message, user_id, current_position, total_files):
-    """Procesa un solo archivo con progreso MEJORADO y descarga rápida - USANDO filename_utils"""
+    """Procesa un solo archivo con progreso MEJORADO y descarga rápida"""
     max_retries = 3
     start_time = time.time()
     
@@ -1202,7 +1224,7 @@ async def process_single_file(client, message, user_id, current_position, total_
 
         user_dir = file_service.get_user_directory(user_id, "downloads")
         
-        # NUEVO: Usar safe_filename de filename_utils
+        # Usar safe_filename
         stored_filename = safe_filename(original_filename)
         
         # Verificar si el nombre es seguro
@@ -1223,7 +1245,8 @@ async def process_single_file(client, message, user_id, current_position, total_
             file_path = os.path.join(user_dir, stored_filename)
             counter += 1
 
-        file_number = file_service.register_file(user_id, original_filename, stored_filename, "downloads")
+        # Registrar archivo (async)
+        file_number = await file_service.register_file_async(user_id, original_filename, stored_filename, "downloads")
         logger.info(f"📝 Archivo registrado: #{file_number} - {original_filename} -> {stored_filename}")
 
         initial_message = progress_service.create_progress_message(
@@ -1302,7 +1325,8 @@ async def process_single_file(client, message, user_id, current_position, total_
             
             logger.info(f"🔗 URL generada: {download_url}")
 
-            files_list = file_service.list_user_files(user_id, "downloads")
+            # Obtener lista de archivos para encontrar el número correcto (async)
+            files_list = await file_service.list_user_files_async(user_id, "downloads")
             current_file_number = None
             for file_info in files_list:
                 if file_info['stored_name'] == stored_filename:
