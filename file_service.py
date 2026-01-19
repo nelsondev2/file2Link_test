@@ -15,7 +15,7 @@ class FileService:
         self.metadata_file = "file_metadata.json"
         self.users_file = "users.json"
         self.hashes_file = "file_hashes.json"
-        self.HASH_EXPIRE_DAYS = HASH_EXPIRE_DAYS  # ⬅️ ATRIBUTO AÑADIDO
+        self.HASH_EXPIRE_DAYS = HASH_EXPIRE_DAYS
         
         self.load_metadata()
         self.load_users()
@@ -143,7 +143,7 @@ class FileService:
             'filename': filename,
             'file_type': file_type,
             'created_at': timestamp,
-            'expires_at': timestamp + (self.HASH_EXPIRE_DAYS * 24 * 3600)  # ⬅️ USAR self.
+            'expires_at': timestamp + (self.HASH_EXPIRE_DAYS * 24 * 3600)
         }
         
         self.save_hashes()
@@ -195,21 +195,27 @@ class FileService:
         return f"{size:.1f} TB"
 
     def create_download_url(self, user_id, filename):
-        """Crea una URL de descarga segura CON HASH (como primer bot)"""
+        """Crea una URL de descarga segura CON HASH (como primer bot) - CORREGIDO"""
         safe_filename = self.sanitize_filename(filename)
         file_hash = self.create_file_hash(user_id, safe_filename, "downloads")
         
-        # URL con hash como parámetro (estilo primer bot)
+        # CORREGIDO: URL sin barra doble al inicio
         encoded_filename = urllib.parse.quote(safe_filename)
-        return f"{RENDER_DOMAIN}/download/{file_hash}?file={encoded_filename}"
+        
+        # Asegurar que RENDER_DOMAIN no termine con /
+        base_url = RENDER_DOMAIN.rstrip('/')
+        return f"{base_url}/download/{file_hash}?file={encoded_filename}"
 
     def create_packed_url(self, user_id, filename):
-        """Crea una URL para archivos empaquetados CON HASH"""
+        """Crea una URL para archivos empaquetados CON HASH - CORREGIDO"""
         safe_filename = self.sanitize_filename(filename)
         file_hash = self.create_file_hash(user_id, safe_filename, "packed")
         
         encoded_filename = urllib.parse.quote(safe_filename)
-        return f"{RENDER_DOMAIN}/packed/{file_hash}?file={encoded_filename}"
+        
+        # Asegurar que RENDER_DOMAIN no termine con /
+        base_url = RENDER_DOMAIN.rstrip('/')
+        return f"{base_url}/packed/{file_hash}?file={encoded_filename}"
 
     def get_user_directory(self, user_id, file_type="downloads"):
         """Obtiene el directorio del usuario"""
