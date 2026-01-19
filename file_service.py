@@ -6,6 +6,7 @@ import time
 import logging
 import sys
 from config import BASE_DIR, RENDER_DOMAIN, HASH_SALT, HASH_EXPIRE_DAYS
+from filename_utils import clean_for_url, clean_for_filesystem, get_url_safe_name  # NUEVO IMPORT
 
 logger = logging.getLogger(__name__)
 
@@ -177,14 +178,8 @@ class FileService:
         return next_num
     
     def sanitize_filename(self, filename):
-        """Limpia el nombre de archivo para que sea URL-safe"""
-        invalid_chars = '<>:"/\\|?*'
-        for char in invalid_chars:
-            filename = filename.replace(char, '_')
-        if len(filename) > 100:
-            name, ext = os.path.splitext(filename)
-            filename = name[:100-len(ext)] + ext
-        return filename
+        """Limpia el nombre de archivo para que sea URL-safe - USANDO filename_utils"""
+        return clean_for_url(filename)
 
     def format_bytes(self, size):
         """Formatea bytes a formato legible"""
@@ -195,12 +190,13 @@ class FileService:
         return f"{size:.1f} TB"
 
     def create_download_url(self, user_id, filename):
-        """Crea una URL de descarga segura CON HASH (como primer bot) - CORREGIDO"""
-        safe_filename = self.sanitize_filename(filename)
+        """Crea una URL de descarga segura CON HASH - CORREGIDO"""
+        # Usar clean_for_url en lugar de sanitize_filename para consistencia
+        safe_filename = clean_for_url(filename)
         file_hash = self.create_file_hash(user_id, safe_filename, "downloads")
         
-        # CORREGIDO: URL sin barra doble al inicio
-        encoded_filename = urllib.parse.quote(safe_filename)
+        # Codificar nombre para URL
+        encoded_filename = get_url_safe_name(safe_filename)
         
         # Asegurar que RENDER_DOMAIN no termine con /
         base_url = RENDER_DOMAIN.rstrip('/')
@@ -208,10 +204,10 @@ class FileService:
 
     def create_packed_url(self, user_id, filename):
         """Crea una URL para archivos empaquetados CON HASH - CORREGIDO"""
-        safe_filename = self.sanitize_filename(filename)
+        safe_filename = clean_for_url(filename)
         file_hash = self.create_file_hash(user_id, safe_filename, "packed")
         
-        encoded_filename = urllib.parse.quote(safe_filename)
+        encoded_filename = get_url_safe_name(safe_filename)
         
         # Asegurar que RENDER_DOMAIN no termine con /
         base_url = RENDER_DOMAIN.rstrip('/')
@@ -387,7 +383,8 @@ class FileService:
             if not file_data:
                 return False, "Archivo no encontrado en metadata"
             
-            new_name = self.sanitize_filename(new_name)
+            # Usar clean_for_filesystem para el nombre en disco
+            new_name_clean = clean_for_filesystem(new_name)
             
             user_dir = self.get_user_directory(user_id, file_type)
             old_path = os.path.join(user_dir, file_data["stored_name"])
@@ -396,7 +393,7 @@ class FileService:
                 return False, "Archivo físico no encontrado"
             
             _, ext = os.path.splitext(file_data["stored_name"])
-            new_stored_name = new_name + ext
+            new_stored_name = new_name_clean + ext
             
             counter = 1
             base_new_stored_name = new_stored_name
