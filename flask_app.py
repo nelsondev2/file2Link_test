@@ -2,7 +2,7 @@ import os
 import time
 import urllib.parse
 import logging
-from flask import Flask, send_from_directory, jsonify, render_template_string, request, send_file
+from flask import Flask, send_from_directory, jsonify, render_template_string, request, send_file, make_response
 from werkzeug.utils import safe_join
 
 from config import BASE_DIR, RENDER_DOMAIN, MAX_FILE_SIZE_MB, HASH_EXPIRE_DAYS
@@ -652,14 +652,11 @@ def api_stats():
 
 @app.route('/download/<file_hash>')
 def secure_download(file_hash):
-    """Descarga segura con hash (como primer bot)"""
+    """Descarga segura con hash - VERSIÓN MEJORADA Y CORREGIDA"""
     try:
         filename = request.args.get('file')
         if not filename:
-            return jsonify({
-                "error": "Nombre de archivo requerido",
-                "usage": "/download/<hash>?file=<filename>"
-            }), 400
+            return jsonify({"error": "Nombre de archivo requerido", "usage": "/download/<hash>?file=<filename>"}), 400
         
         # Decodificar nombre de archivo
         filename = urllib.parse.unquote(filename)
@@ -667,119 +664,99 @@ def secure_download(file_hash):
         # Verificar hash
         file_info = file_service.get_file_by_hash(file_hash)
         if not file_info:
-            return jsonify({
-                "error": "Hash inválido o expirado",
-                "hash": file_hash,
-                "message": "El enlace no es válido o ha expirado"
-            }), 403
+            return jsonify({"error": "Hash inválido o expirado", "hash": file_hash, "message": "El enlace no es válido o ha expirado"}), 403
         
         # Verificar que el archivo solicitado coincida
         if file_info['filename'] != filename:
-            return jsonify({
-                "error": "Nombre de archivo no coincide",
-                "requested": filename,
-                "expected": file_info['filename']
-            }), 400
+            return jsonify({"error": "Nombre de archivo no coincide", "requested": filename, "expected": file_info['filename']}), 400
         
         # Servir el archivo
         user_dir = file_service.get_user_directory(file_info['user_id'], file_info['file_type'])
         file_path = safe_join(user_dir, filename)
         
         if not os.path.exists(file_path):
-            return jsonify({
-                "error": "Archivo no encontrado",
-                "filename": filename,
-                "user_id": file_info['user_id']
-            }), 404
+            return jsonify({"error": "Archivo no encontrado", "filename": filename, "user_id": file_info['user_id']}), 404
         
-        # Configurar headers para descarga
-        response = send_file(
-            file_path,
-            as_attachment=True,
-            download_name=file_info['original_name'],
-            mimetype='application/octet-stream'
-        )
+        # Obtener nombre original
+        original_name = file_service.get_original_filename(file_info['user_id'], filename, file_info['file_type'])
         
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
+        # LEER ARCHIVO Y CREAR RESPUESTA MANUALMENTE - CORRECCIÓN DEFINITIVA
+        with open(file_path, 'rb') as f:
+            file_data = f.read()
         
-        logger.info(f"✅ Descarga segura: {filename} via hash {file_hash[:8]}...")
+        # Crear respuesta manual para control total
+        response = make_response(file_data)
+        
+        # Headers CORREGIDOS - SIN encoding automático de Flask
+        # Usar solo filename sin charset=utf-8 que causa problemas
+        response.headers['Content-Type'] = 'application/octet-stream'
+        response.headers['Content-Disposition'] = f'attachment; filename="{original_name}"'
+        response.headers['Content-Length'] = str(len(file_data))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        
+        logger.info(f"✅ Descarga segura: {original_name} via hash {file_hash[:8]}...")
         return response
         
     except Exception as e:
-        logger.error(f"Error en descarga segura: {e}")
-        return jsonify({
-            "error": "Error interno del servidor",
-            "message": str(e)
-        }), 500
+        logger.error(f"Error en descarga segura: {e}", exc_info=True)
+        return jsonify({"error": "Error interno del servidor", "message": str(e)}), 500
 
 @app.route('/packed/<file_hash>')
 def secure_packed(file_hash):
-    """Descarga de archivos empaquetados con hash"""
+    """Descarga de archivos empaquetados con hash - VERSIÓN MEJORADA Y CORREGIDA"""
     try:
         filename = request.args.get('file')
         if not filename:
-            return jsonify({
-                "error": "Nombre de archivo requerido",
-                "usage": "/packed/<hash>?file=<filename>"
-            }), 400
+            return jsonify({"error": "Nombre de archivo requerido", "usage": "/packed/<hash>?file=<filename>"}), 400
         
         filename = urllib.parse.unquote(filename)
         
         # Verificar hash
         file_info = file_service.get_file_by_hash(file_hash)
         if not file_info:
-            return jsonify({
-                "error": "Hash inválido o expirado",
-                "hash": file_hash
-            }), 403
+            return jsonify({"error": "Hash inválido o expirado", "hash": file_hash}), 403
         
         if file_info['filename'] != filename:
-            return jsonify({
-                "error": "Nombre de archivo no coincide",
-                "requested": filename,
-                "expected": file_info['filename']
-            }), 400
+            return jsonify({"error": "Nombre de archivo no coincide", "requested": filename, "expected": file_info['filename']}), 400
         
         # Verificar que sea tipo packed
         if file_info['file_type'] != 'packed':
-            return jsonify({
-                "error": "Tipo de archivo incorrecto",
-                "expected": "packed",
-                "actual": file_info['file_type']
-            }), 400
+            return jsonify({"error": "Tipo de archivo incorrecto", "expected": "packed", "actual": file_info['file_type']}), 400
         
         user_dir = file_service.get_user_directory(file_info['user_id'], "packed")
         file_path = safe_join(user_dir, filename)
         
         if not os.path.exists(file_path):
-            return jsonify({
-                "error": "Archivo empaquetado no encontrado",
-                "filename": filename
-            }), 404
+            return jsonify({"error": "Archivo empaquetado no encontrado", "filename": filename}), 404
         
-        response = send_file(
-            file_path,
-            as_attachment=True,
-            download_name=file_info['original_name'],
-            mimetype='application/octet-stream'
-        )
+        # Obtener nombre original
+        original_name = file_service.get_original_filename(file_info['user_id'], filename, "packed")
         
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        # LEER ARCHIVO MANUALMENTE
+        with open(file_path, 'rb') as f:
+            file_data = f.read()
         
-        logger.info(f"✅ Packed download: {filename} via hash {file_hash[:8]}...")
+        # Crear respuesta manual
+        response = make_response(file_data)
+        
+        # Headers CORREGIDOS
+        response.headers['Content-Type'] = 'application/octet-stream'
+        response.headers['Content-Disposition'] = f'attachment; filename="{original_name}"'
+        response.headers['Content-Length'] = str(len(file_data))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        
+        logger.info(f"✅ Packed download: {original_name} via hash {file_hash[:8]}...")
         return response
         
     except Exception as e:
-        logger.error(f"Error en packed download: {e}")
-        return jsonify({
-            "error": "Error interno del servidor",
-            "message": str(e)
-        }), 500
-
+        logger.error(f"Error en packed download: {e}", exc_info=True)
+        return jsonify({"error": "Error interno del servidor", "message": str(e)}), 500
 @app.errorhandler(404)
 def not_found(error):
     """Manejo de errores 404"""
