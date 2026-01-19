@@ -16,6 +16,7 @@ from file_service import file_service
 from progress_service import progress_service
 from packing_service import packing_service
 from download_service import fast_download_service
+from filename_utils import safe_filename, clean_for_filesystem, clean_for_url  # NUEVO IMPORT
 
 logger = logging.getLogger(__name__)
 
@@ -46,21 +47,6 @@ def get_user_queue_lock(user_id):
     if user_id not in user_queue_locks:
         user_queue_locks[user_id] = asyncio.Lock()
     return user_queue_locks[user_id]
-
-# ===== NUEVO: FUNCIÓN DE LIMPIEZA DE NOMBRES CORREGIDA =====
-def clean_filename_for_storage(filename):
-    """Limpia nombre para almacenamiento (mantiene acentos) - CORREGIDA"""
-    # Solo eliminar caracteres realmente problemáticos para sistema de archivos
-    # Mantener acentos, espacios, paréntesis, puntos, comas, etc.
-    problem_chars = r'[<>:"/\\|?*]'
-    cleaned = re.sub(problem_chars, '_', filename)
-    
-    # Limitar longitud
-    if len(cleaned) > 150:
-        name, ext = os.path.splitext(cleaned)
-        cleaned = name[:150-len(ext)] + ext
-    
-    return cleaned
 
 # ===== NUEVO: FUNCIONES AUXILIARES =====
 async def send_to_bin_channel(client, text):
@@ -375,74 +361,28 @@ async def stats_command(client, message):
         await message.reply_text("❌ Error obteniendo estadísticas.")
 
 async def about_command(client, message):
-    """Comando /about - Información del bot"""
+    """Comando /about - VERSIÓN SIMPLIFICADA"""
     try:
         user_id = message.from_user.id
         
         if not file_service.is_user_exist(user_id):
             file_service.add_user(user_id, message.from_user.first_name)
         
-        about_text = f"""🤖 **Nelson File2Link - V2 Mejorado**
+        about_text = f"""🤖 **Bot de Archivos**
 
-📋 **INFORMACIÓN DEL BOT:**
+**Funciones principales:**
+• Subir archivos hasta {MAX_FILE_SIZE_MB} MB
+• Descargar desde enlaces
+• Empaquetar en ZIP
+• Renombrar y organizar
 
-**Nombre:** Nelson File2Link Bot
-**Versión:** 2.0.0 Mejorada
-**Desarrollador:** Sistema optimizado combinando lo mejor de ambos bots
-**Actualización:** {time.strftime('%Y-%m-%d')}
+**📏 Especificaciones:**
+• Tamaño máximo: {MAX_FILE_SIZE_MB} MB
+• Archivos en cola: {MAX_QUEUE_SIZE}
+• Enlaces válidos por {file_service.HASH_EXPIRE_DAYS} días
 
-🛠️ **CARACTERÍSTICAS MEJORADAS:**
-
-🔐 **Seguridad del Primer Bot:**
-• URLs con hash único de 12 caracteres
-• Hashes temporales con expiración
-• Imposible adivinar URLs de otros usuarios
-
-📁 **Gestión del Segundo Bot:**
-• Sistema de carpetas por usuario
-• Cola inteligente con límites anti-abuso
-• Progreso detallado por archivo
-• Comandos /queue, /clearqueue
-
-👥 **Nuevo Sistema de Administración:**
-• Registro automático de usuarios
-• Comandos /users y /broadcast para owners
-• Estadísticas completas del sistema
-• Canal de logs opcional
-
-⚡ **Rendimiento Optimizado:**
-• Descargas rápidas con buffer de 128KB
-• Procesamiento concurrente controlado
-• Límites anti-abuso automáticos
-• Optimizado para bajos recursos
-
-📏 **ESPECIFICACIONES:**
-
-• **Tamaño máximo:** {MAX_FILE_SIZE_MB} MB por archivo
-• **Hash válido por:** {file_service.HASH_EXPIRE_DAYS} días
-• **Límite de cola:** {MAX_QUEUE_SIZE} archivos por usuario
-• **Subidas simultáneas:** {MAX_CONCURRENT_UPLOADS}
-
-🔧 **TECNOLOGÍA:**
-
-• **Framework:** Pyrogram + Flask + Waitress
-• **Seguridad:** Hash MD5 + timestamps
-• **Base de datos:** JSON optimizado triple
-• **Servidor:** Render.com compatible
-
-🎯 **LO MEJOR DE AMBOS BOTS:**
-
-✓ URLs seguras como primer bot
-✓ Gestión de colas como segundo bot
-✓ Sistema de usuarios completo
-✓ Estadísticas avanzadas
-✓ Sin autenticación forzada
-✓ Sin contraseñas molestas
-
-📞 **SOPORTE:**
-
-Sistema profesional para gestión de archivos via Telegram.
-Combina seguridad con usabilidad."""
+**📞 Soporte:**
+Bot para gestión de archivos via Telegram."""
 
         await message.reply_text(about_text)
         
@@ -452,7 +392,7 @@ Combina seguridad con usabilidad."""
 
 # ===== COMANDOS EXISTENTES MEJORADOS =====
 async def start_command(client, message):
-    """Maneja el comando /start"""
+    """Maneja el comando /start - VERSIÓN SIMPLIFICADA"""
     try:
         user = message.from_user
         
@@ -469,48 +409,35 @@ async def start_command(client, message):
                 f"**Username:** @{user.username if user.username else 'N/A'}"
             )
         
-        welcome_text = f"""👋 **Bienvenido/a {user.first_name}!**
+        welcome_text = f"""👋 **Hola {user.first_name}!**
 
-🤖 **Nelson File2Link Bot - V2 Mejorada**
+🤖 **Bot de Archivos**
 
-✅ **NUEVO:** URLs seguras con hash como primer bot
-✅ **NUEVO:** Sistema de administración completo
-✅ **NUEVO:** Estadísticas avanzadas
+**📁 COMANDOS BÁSICOS:**
+`/cd downloads` - Tus archivos de descarga
+`/cd packed` - Tus archivos empaquetados
 
-**📁 SISTEMA DE CARPETAS:**
-`/cd downloads` - Archivos de descarga
-`/cd packed` - Archivos empaquetados
-`/cd` - Carpeta actual
-
-**📄 COMANDOS EN CARPETA:**
-`/list` - Listar archivos
-`/rename <número> <nuevo_nombre>`
-`/delete <número>`
+**📄 EN CARPETA ACTUAL:**
+`/list` - Ver archivos
+`/rename N nuevo_nombre`
+`/delete N`
 `/clear` - Vaciar carpeta
 
-**📦 EMPAQUETADO:**
-`/pack` - Empaquetar downloads → packed
-`/pack <MB>` - Empaquetar y dividir
+**📦 EMPAQUETAR:**
+`/pack` - Crear ZIP de tus archivos
+`/pack MB` - Dividir en partes
 
-**🔄 GESTIÓN DE COLA:**
-`/queue` - Ver archivos en cola
+**🔄 GESTIÓN:**
+`/queue` - Ver cola de descargas
 `/clearqueue` - Limpiar cola
+`/status` - Tu información
 
-**🔍 INFORMACIÓN MEJORADA:**
-`/status` - Tu estado
-`/stats` - Estadísticas del sistema
-`/about` - Información del bot
-`/help` - Ayuda completa
+**🔍 AYUDA:**
+`/help` - Ver todos los comandos
 
-**👥 ADMINISTRACIÓN (Owners):**
-`/users` - Ver usuarios
-`/broadcast` - Enviar mensaje a todos
+**📏 LÍMITE:** {MAX_FILE_SIZE_MB} MB por archivo
 
-**📏 LÍMITE DE ARCHIVOS:**
-Tamaño máximo: {MAX_FILE_SIZE_MB} MB
-Hash seguro: {file_service.HASH_EXPIRE_DAYS} días de validez
-
-**¡Envía archivos o usa /cd para comenzar!**"""
+**¡Envía archivos para comenzar!**"""
 
         await message.reply_text(welcome_text)
         logger.info(f"/start recibido de {user.id} - {user.first_name}")
@@ -519,23 +446,19 @@ Hash seguro: {file_service.HASH_EXPIRE_DAYS} días de validez
         logger.error(f"Error en /start: {e}")
 
 async def help_command(client, message):
-    """Maneja el comando /help"""
+    """Maneja el comando /help - VERSIÓN SIMPLIFICADA"""
     try:
         user_id = message.from_user.id
         
         if not file_service.is_user_exist(user_id):
             file_service.add_user(user_id, message.from_user.first_name)
         
-        help_text = f"""📚 **Ayuda - Nelson File2Link V2**
-
-**🔐 NUEVO: URLs Seguras**
-Tus archivos ahora tienen URLs con hash único como el primer bot:
-`https://dominio.com/download/abc123def456?file=archivo.zip`
+        help_text = f"""📚 **COMANDOS DISPONIBLES**
 
 **📁 NAVEGACIÓN:**
 `/cd downloads` - Archivos de descarga
 `/cd packed` - Archivos empaquetados  
-`/cd` - Carpeta actual
+`/cd` - Ver carpeta actual
 
 **📄 GESTIÓN (en carpeta actual):**
 `/list` - Ver archivos (usa `/list 2` para página 2)
@@ -547,26 +470,14 @@ Tus archivos ahora tienen URLs con hash único como el primer bot:
 `/pack` - Crear ZIP de downloads
 `/pack MB` - Dividir en partes (ej: `/pack 100`)
 
-**🔄 GESTIÓN DE COLA:**
-`/queue` - Ver archivos en cola de descarga
-`/clearqueue` - Limpiar cola de descarga
+**🔄 COLA DE DESCARGA:**
+`/queue` - Ver archivos en cola
+`/clearqueue` - Limpiar cola
 Límite: {MAX_QUEUE_SIZE} archivos en cola
 
 **🔍 INFORMACIÓN:**
 `/status` - Tu estado y uso
-`/stats` - Estadísticas del sistema
-`/about` - Información técnica
-`/help` - Esta ayuda
-
-**👥 ADMINISTRACIÓN (Solo Owners):**
-`/users` - Ver usuarios registrados
-`/broadcast` - Enviar mensaje a todos (responde a un mensaje)
-
-**📏 LÍMITES:**
-• Tamaño máximo: {MAX_FILE_SIZE_MB} MB
-• Hash válido: {file_service.HASH_EXPIRE_DAYS} días
-• Cola máxima: {MAX_QUEUE_SIZE} archivos
-• Subidas simultáneas: {MAX_CONCURRENT_UPLOADS}
+`/about` - Información del bot
 
 **📌 EJEMPLOS:**
 `/cd downloads`
@@ -660,7 +571,6 @@ async def list_command(client, message):
             url_hash = file_info['url'].split('/')[-1].split('?')[0][:8]
             files_text += f"**#{file_info['number']}** - `{file_info['name']}`\n"
             files_text += f"📏 **Tamaño:** {file_info['size_mb']:.1f} MB\n"
-            files_text += f"🔐 **Hash:** `{url_hash}...`\n"
             files_text += f"🔗 **Enlace:** [Descargar]({file_info['url']})\n\n"
 
         if total_pages > 1:
@@ -814,11 +724,7 @@ async def rename_command(client, message):
         success, result_message, new_url = file_service.rename_file(user_id, file_number, new_name, current_folder)
         
         if success:
-            # Extraer hash para mostrar
-            url_hash = new_url.split('/')[-1].split('?')[0][:8]
-            
             response_text = f"✅ **{result_message}**\n\n"
-            response_text += f"**Nuevo hash:** `{url_hash}...`\n"
             response_text += f"**Nuevo enlace:**\n"
             response_text += f"🔗 [{new_name}]({new_url})"
             
@@ -832,8 +738,7 @@ async def rename_command(client, message):
                 f"#FILE_RENAMED\n\n"
                 f"**Usuario:** [{message.from_user.first_name}](tg://user?id={user_id})\n"
                 f"**Archivo:** #{file_number} en {current_folder}\n"
-                f"**Nuevo nombre:** {new_name}\n"
-                f"**Nuevo hash:** {url_hash}..."
+                f"**Nuevo nombre:** {new_name}"
             )
         else:
             await message.reply_text(f"❌ **{result_message}**")
@@ -843,7 +748,7 @@ async def rename_command(client, message):
         await message.reply_text("❌ Error al renombrar archivo.")
 
 async def status_command(client, message):
-    """Maneja el comando /status - Estado del sistema"""
+    """Maneja el comando /status - VERSIÓN SIMPLIFICADA"""
     try:
         user_id = message.from_user.id
         
@@ -861,29 +766,22 @@ async def status_command(client, message):
         queue_size = len(user_queues.get(user_id, []))
         is_processing = user_id in user_current_processing
         
-        status_text = f"""📊 **ESTADO DEL SISTEMA - {message.from_user.first_name}**
+        status_text = f"""📊 **TU INFORMACIÓN**
 
 **👤 USUARIO:**
-• **ID:** `{user_id}`
-• **Carpeta actual:** `{session['current_folder']}`
-• **Archivos downloads:** {downloads_count}
-• **Archivos packed:** {packed_count}
-• **Espacio usado:** {size_mb:.2f} MB
+• Carpeta actual: `{session['current_folder']}`
+• Archivos descargados: {downloads_count}
+• Archivos empaquetados: {packed_count}
+• Espacio usado: {size_mb:.2f} MB
 
-**🔄 COLA DE DESCARGA:**
-• **Archivos en cola:** {queue_size}
-• **Procesando ahora:** {"Sí" if is_processing else "No"}
-• **Límite de cola:** {MAX_QUEUE_SIZE} archivos
+**🔄 COLA:**
+• Archivos en cola: {queue_size}
+• Procesando: {"Sí" if is_processing else "No"}
+• Límite: {MAX_QUEUE_SIZE} archivos
 
-**📏 CONFIGURACIÓN:**
-• **Límite por archivo:** {MAX_FILE_SIZE_MB} MB
-• **Hash válido por:** {file_service.HASH_EXPIRE_DAYS} días
-• **Subidas simultáneas:** {MAX_CONCURRENT_UPLOADS}
-
-**💡 CONSEJOS:**
+**💡 TIPS:**
 • Usa `/queue` para ver cola detallada
-• Usa `/clearqueue` para limpiar cola
-• Los hashes expiran después de {file_service.HASH_EXPIRE_DAYS} días"""
+• Usa `/clearqueue` para limpiar cola"""
 
         await message.reply_text(status_text)
         
@@ -927,7 +825,7 @@ async def pack_command(client, message):
         
         status_msg = await message.reply_text(
             "📦 **Iniciando empaquetado...**\n\n"
-            "Uniendo todos tus archivos en un ZIP seguro con hash..."
+            "Uniendo todos tus archivos en un ZIP seguro..."
         )
         
         def run_simple_packing():
@@ -950,19 +848,13 @@ async def pack_command(client, message):
             file_info = files[0]
             total_files_info = f" ({file_info['total_files']} archivos)" if 'total_files' in file_info else ""
             
-            # Extraer hash para mostrar
-            url_hash = file_info['url'].split('/')[-1].split('?')[0][:8]
-            
-            response_text = f"""✅ **Empaquetado Completado{total_files_info}**
+            response_text = f"""✅ **Empaquetado completado{total_files_info}**
 
 **Archivo:** `{file_info['filename']}`
 **Tamaño:** {file_info['size_mb']:.1f} MB
-**Hash seguro:** `{url_hash}...`
 
-**Enlace de Descarga Seguro:**
-🔗 [{file_info['filename']}]({file_info['url']})
-
-**Nota:** Usa `/cd packed` y `/list` para ver tus archivos empaquetados"""
+**Enlace de descarga:**
+🔗 [{file_info['filename']}]({file_info['url']})"""
             
             await status_msg.edit_text(
                 response_text, 
@@ -978,17 +870,15 @@ async def pack_command(client, message):
             
             total_files_info = f" ({total_files} archivos)" if total_files > 0 else ""
             
-            response_text = f"""✅ **Empaquetado Completado{total_files_info}**
+            response_text = f"""✅ **Empaquetado completado{total_files_info}**
 
-**Archivos Generados:** {len(files)} partes
+**Archivos:** {len(files)} partes
 **Tamaño Total:** {sum(f['size_mb'] for f in files):.1f} MB
 
-**Enlaces de Descarga Seguros:**"""
+**Enlaces de descarga:**"""
             
             for file_info in files:
-                url_hash = file_info['url'].split('/')[-1].split('?')[0][:8]
                 response_text += f"\n\n**Parte {file_info['number']}:** 🔗 [{file_info['filename']}]({file_info['url']})"
-                response_text += f"\n`Hash: {url_hash}...`"
             
             response_text += "\n\n**Nota:** Usa `/cd packed` y `/list` para ver tus archivos empaquetados"
             
@@ -996,8 +886,7 @@ async def pack_command(client, message):
                 await status_msg.edit_text("✅ **Empaquetado completado**\n\nLos enlaces se enviarán en varios mensajes...")
                 
                 for file_info in files:
-                    url_hash = file_info['url'].split('/')[-1].split('?')[0][:8]
-                    part_text = f"**Parte {file_info['number']}:** 🔗 [{file_info['filename']}]({file_info['url']})\n`Hash: {url_hash}...`"
+                    part_text = f"**Parte {file_info['number']}:** 🔗 [{file_info['filename']}]({file_info['url']})"
                     await message.reply_text(part_text, disable_web_page_preview=True)
             else:
                 await status_msg.edit_text(
@@ -1036,12 +925,13 @@ async def queue_command(client, message):
             return
         
         queue_size = len(user_queues[user_id])
-        current_processing = "✅ Sí" if user_id in user_current_processing else "❌ No"
+        current_processing = "✅ **EN PROCESO AHORA**" if user_id in user_current_processing else "⏸️ **Esperando turno**"
         
         queue_text = f"📋 **Estado de la Cola - {queue_size} archivo(s)**\n\n"
-        queue_text += f"**Procesando actualmente:** {current_processing}\n"
-        queue_text += f"**Límite de cola:** {MAX_QUEUE_SIZE} archivos\n\n"
-        queue_text += f"**Archivos en cola:**\n"
+        queue_text += f"**Estado actual:** {current_processing}\n"
+        queue_text += f"**Límite de cola:** {MAX_QUEUE_SIZE} archivos\n"
+        queue_text += f"**Procesamiento:** UNO POR UNO (orden estricto)\n\n"
+        queue_text += f"**Archivos en cola (en este orden):**\n"
         
         for i, msg in enumerate(user_queues[user_id], 1):
             file_info = "Desconocido"
@@ -1061,12 +951,17 @@ async def queue_command(client, message):
                 file_size = msg.photo[-1].file_size or 0
             
             size_mb = file_size / (1024 * 1024) if file_size > 0 else 0
-            queue_text += f"**#{i}** - {file_info} ({size_mb:.1f} MB)\n"
+            
+            # Indicador visual del orden
+            if i == 1 and user_id not in user_current_processing:
+                queue_text += f"**👉 #{i}** - {file_info} ({size_mb:.1f} MB) **[PRÓXIMO]**\n"
+            else:
+                queue_text += f"**#{i}** - {file_info} ({size_mb:.1f} MB)\n"
         
         queue_text += f"\n**Comandos:**\n"
         queue_text += f"• `/clearqueue` - Limpiar cola completa\n"
         queue_text += f"• `/status` - Ver tu estado\n"
-        queue_text += f"• Sigue enviando archivos, se procesarán en orden"
+        queue_text += f"• Los archivos se procesan UNO POR UNO en el orden mostrado"
         
         await message.reply_text(queue_text)
         
@@ -1144,7 +1039,7 @@ async def cleanup_command(client, message):
 
 # ===== NUEVO: SISTEMA DE COLA MEJORADO =====
 async def handle_file(client, message):
-    """Maneja la recepción de archivos con sistema de cola MEJORADO - CORREGIDO"""
+    """Maneja la recepción de archivos con sistema de cola UNO POR UNO"""
     try:
         user = message.from_user
         user_id = user.id
@@ -1209,14 +1104,13 @@ async def handle_file(client, message):
             f"✅ **Archivo recibido**\n\n"
             f"**Nombre:** `{file_name[:50]}`\n"
             f"**Tamaño:** {file_service.format_bytes(file_size)}\n"
-            f"**Posición en cola:** #{new_queue_size}\n\n"
-            f"Se procesará automáticamente en orden.\n"
-            f"Usa `/queue` para ver el estado."
+            f"**En cola:** #{new_queue_size}\n\n"
+            f"Se procesará en orden. Usa `/queue` para ver estado."
         )
         
-        # Iniciar procesamiento si es el primer archivo
-        if new_queue_size == 1:
-            await process_file_queue(client, user_id)
+        # Iniciar procesamiento si no hay otro en curso
+        if user_id not in user_current_processing:
+            asyncio.create_task(process_file_queue(client, user_id))
         
     except Exception as e:
         logger.error(f"Error procesando archivo: {e}", exc_info=True)
@@ -1226,7 +1120,7 @@ async def handle_file(client, message):
             pass
 
 async def process_file_queue(client, user_id):
-    """Procesa la cola de archivos del usuario de manera optimizada"""
+    """Procesa la cola de archivos del usuario UNO POR UNO respetando el orden"""
     try:
         async with get_user_queue_lock(user_id):
             total_files_in_batch = len(user_queues[user_id])
@@ -1237,32 +1131,23 @@ async def process_file_queue(client, user_id):
             
             current_position = 0
             
-            # Procesar hasta MAX_CONCURRENT_UPLOADS archivos simultáneamente
+            # Procesar archivos UNO POR UNO
             while user_queues.get(user_id) and user_queues[user_id]:
-                # Tomar hasta MAX_CONCURRENT_UPLOADS archivos
-                batch_to_process = []
-                for _ in range(min(MAX_CONCURRENT_UPLOADS, len(user_queues[user_id]))):
-                    if user_queues[user_id]:
-                        batch_to_process.append(user_queues[user_id].pop(0))
-                
-                if not batch_to_process:
+                # Tomar SOLO UN archivo de la cola
+                if not user_queues[user_id]:
                     break
                 
-                # Procesar batch concurrentemente
-                tasks = []
-                for i, message in enumerate(batch_to_process):
-                    current_position += 1
-                    task = process_single_file(
-                        client, message, user_id, 
-                        current_position, total_files_in_batch
-                    )
-                    tasks.append(task)
+                message = user_queues[user_id].pop(0)
+                current_position += 1
                 
-                # Esperar a que todos terminen
-                await asyncio.gather(*tasks, return_exceptions=True)
+                # Procesar el archivo individualmente
+                await process_single_file(
+                    client, message, user_id, 
+                    current_position, total_files_in_batch
+                )
                 
-                # Pequeña pausa entre batches
-                await asyncio.sleep(1)
+                # Pequeña pausa entre archivos para evitar sobrecarga
+                await asyncio.sleep(0.5)
         
         # Limpieza final
         if user_id in user_batch_totals:
@@ -1276,7 +1161,7 @@ async def process_file_queue(client, user_id):
             del user_batch_totals[user_id]
 
 async def process_single_file(client, message, user_id, current_position, total_files):
-    """Procesa un solo archivo con progreso MEJORADO y descarga rápida - CORREGIDO"""
+    """Procesa un solo archivo con progreso MEJORADO y descarga rápida - USANDO filename_utils"""
     max_retries = 3
     start_time = time.time()
     
@@ -1317,13 +1202,21 @@ async def process_single_file(client, message, user_id, current_position, total_
 
         user_dir = file_service.get_user_directory(user_id, "downloads")
         
-        # CORREGIDO: Usar nueva función de limpieza que mantiene acentos
-        sanitized_name = clean_filename_for_storage(original_filename)
+        # NUEVO: Usar safe_filename de filename_utils
+        stored_filename = safe_filename(original_filename)
         
-        stored_filename = sanitized_name
-        counter = 1
-        base_name, ext = os.path.splitext(sanitized_name)
+        # Verificar si el nombre es seguro
+        from filename_utils import is_filename_safe
+        if not is_filename_safe(stored_filename):
+            logger.warning(f"Nombre no seguro después de limpieza: {stored_filename}")
+            stored_filename = f"archivo_{int(time.time()) % 10000}"
+            if original_filename and '.' in original_filename:
+                _, ext = os.path.splitext(original_filename)
+                stored_filename += ext
+        
         file_path = os.path.join(user_dir, stored_filename)
+        counter = 1
+        base_name, ext = os.path.splitext(stored_filename)
         
         while os.path.exists(file_path):
             stored_filename = f"{base_name}_{counter}{ext}"
@@ -1404,13 +1297,10 @@ async def process_single_file(client, message, user_id, current_position, total_
             
             size_mb = final_size / (1024 * 1024)
             
-            # Generar URL con hash (como primer bot)
+            # Generar URL con hash
             download_url = file_service.create_download_url(user_id, stored_filename)
             
-            # Extraer hash para mostrar
-            url_hash = download_url.split('/')[-1].split('?')[0][:8]
-            
-            logger.info(f"🔗 URL segura generada: {download_url}")
+            logger.info(f"🔗 URL generada: {download_url}")
 
             files_list = file_service.list_user_files(user_id, "downloads")
             current_file_number = None
@@ -1424,14 +1314,12 @@ async def process_single_file(client, message, user_id, current_position, total_
             if remaining_files > 0:
                 queue_info = f"\n\n⏭️ **Próximos archivos:** {remaining_files} en cola"
 
-            success_text = f"""✅ **Archivo #{current_file_number or file_number} Almacenado!**
+            success_text = f"""✅ **Archivo #{current_file_number or file_number} guardado**
 
 **Nombre:** `{original_filename}`
-**Tipo:** {file_type}
 **Tamaño:** {size_mb:.2f} MB
-**Hash seguro:** `{url_hash}...`
 
-**Enlace de Descarga Seguro:**
+**Enlace de descarga:**
 🔗 [{original_filename}]({download_url})
 
 **Ubicación:** Carpeta `downloads`{queue_info}"""
@@ -1450,7 +1338,6 @@ async def process_single_file(client, message, user_id, current_position, total_
                 f"**Usuario:** [{message.from_user.first_name}](tg://user?id={user_id})\n"
                 f"**Archivo:** #{current_file_number or file_number} - {original_filename}\n"
                 f"**Tamaño:** {size_mb:.2f} MB\n"
-                f"**Hash:** {url_hash}...\n"
                 f"**Posición:** {current_position}/{total_files}"
             )
 
