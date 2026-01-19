@@ -5,6 +5,7 @@ import time
 import asyncio
 import concurrent.futures
 import hashlib
+import re
 from collections import deque
 from pyrogram import Client, filters
 from pyrogram.types import Message
@@ -45,6 +46,21 @@ def get_user_queue_lock(user_id):
     if user_id not in user_queue_locks:
         user_queue_locks[user_id] = asyncio.Lock()
     return user_queue_locks[user_id]
+
+# ===== NUEVO: FUNCIÓN DE LIMPIEZA DE NOMBRES CORREGIDA =====
+def clean_filename_for_storage(filename):
+    """Limpia nombre para almacenamiento (mantiene acentos) - CORREGIDA"""
+    # Solo eliminar caracteres realmente problemáticos para sistema de archivos
+    # Mantener acentos, espacios, paréntesis, puntos, comas, etc.
+    problem_chars = r'[<>:"/\\|?*]'
+    cleaned = re.sub(problem_chars, '_', filename)
+    
+    # Limitar longitud
+    if len(cleaned) > 150:
+        name, ext = os.path.splitext(cleaned)
+        cleaned = name[:150-len(ext)] + ext
+    
+    return cleaned
 
 # ===== NUEVO: FUNCIONES AUXILIARES =====
 async def send_to_bin_channel(client, text):
@@ -1128,7 +1144,7 @@ async def cleanup_command(client, message):
 
 # ===== NUEVO: SISTEMA DE COLA MEJORADO =====
 async def handle_file(client, message):
-    """Maneja la recepción de archivos con sistema de cola MEJORADO"""
+    """Maneja la recepción de archivos con sistema de cola MEJORADO - CORREGIDO"""
     try:
         user = message.from_user
         user_id = user.id
@@ -1260,7 +1276,7 @@ async def process_file_queue(client, user_id):
             del user_batch_totals[user_id]
 
 async def process_single_file(client, message, user_id, current_position, total_files):
-    """Procesa un solo archivo con progreso MEJORADO y descarga rápida"""
+    """Procesa un solo archivo con progreso MEJORADO y descarga rápida - CORREGIDO"""
     max_retries = 3
     start_time = time.time()
     
@@ -1301,7 +1317,8 @@ async def process_single_file(client, message, user_id, current_position, total_
 
         user_dir = file_service.get_user_directory(user_id, "downloads")
         
-        sanitized_name = file_service.sanitize_filename(original_filename)
+        # CORREGIDO: Usar nueva función de limpieza que mantiene acentos
+        sanitized_name = clean_filename_for_storage(original_filename)
         
         stored_filename = sanitized_name
         counter = 1
@@ -1460,12 +1477,12 @@ def setup_handlers(client):
     client.on_message(filters.command("start") & filters.private)(start_command)
     client.on_message(filters.command("help") & filters.private)(help_command)
     client.on_message(filters.command("status") & filters.private)(status_command)
-    client.on_message(filters.command("stats") & filters.private)(stats_command)  # NUEVO
-    client.on_message(filters.command("about") & filters.private)(about_command)  # NUEVO
+    client.on_message(filters.command("stats") & filters.private)(stats_command)
+    client.on_message(filters.command("about") & filters.private)(about_command)
     
     # Comandos de administración (solo owners)
-    client.on_message(filters.command("users") & filters.private)(users_command)  # NUEVO
-    client.on_message(filters.command("broadcast") & filters.private)(broadcast_command)  # NUEVO
+    client.on_message(filters.command("users") & filters.private)(users_command)
+    client.on_message(filters.command("broadcast") & filters.private)(broadcast_command)
     
     # Comandos de navegación
     client.on_message(filters.command("cd") & filters.private)(cd_command)
