@@ -107,7 +107,7 @@ async def users_command(client, message):
             file_service.add_user(user_id, message.from_user.first_name)
         
         # Verificar si es owner
-        if user_id not in OWNER_IDS:
+        if user_id not in OWNER_ID:
             await message.reply_text("❌ Este comando es solo para administradores.")
             return
         
@@ -182,7 +182,7 @@ async def broadcast_command(client, message):
             file_service.add_user(user_id, message.from_user.first_name)
         
         # Verificar si es owner
-        if user_id not in OWNER_IDS:
+        if user_id not in OWNER_ID:
             await message.reply_text("❌ Este comando es solo para administradores.")
             return
         
