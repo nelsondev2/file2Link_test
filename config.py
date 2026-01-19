@@ -35,14 +35,19 @@ BIN_CHANNEL = os.getenv("BIN_CHANNEL", None)
 
 # Hash security
 HASH_SALT = os.getenv("HASH_SALT", "nelson_file2link_secure_salt")
-HASH_EXPIRE_DAYS = int(os.getenv("HASH_EXPIRE_DAYS", "30"))  # ⬅️ CONVERTIR A INT
+HASH_EXPIRE_DAYS = int(os.getenv("HASH_EXPIRE_DAYS", "30"))
 
 # Queue limits
 MAX_QUEUE_SIZE = 20
 MAX_CONCURRENT_UPLOADS = 2
 QUEUE_PROCESSING_TIMEOUT = 3600
 
-# ===== VALIDACIÓN =====
+# ===== VALIDACIÓN Y CORRECCIÓN AUTOMÁTICA =====
+# CORREGIR: Asegurar que RENDER_DOMAIN no termine con /
+if RENDER_DOMAIN.endswith('/'):
+    RENDER_DOMAIN = RENDER_DOMAIN.rstrip('/')
+    print(f"⚠️ CORREGIDO: RENDER_DOMAIN ajustado a: {RENDER_DOMAIN}")
+
 def validate_config():
     """Validar configuración crítica"""
     errors = []
@@ -59,6 +64,10 @@ def validate_config():
     if not RENDER_DOMAIN or "example.com" in RENDER_DOMAIN:
         errors.append("RENDER_DOMAIN no configurado correctamente")
     
+    # Verificar que RENDER_DOMAIN no tenga doble barra
+    if '//' in RENDER_DOMAIN.replace('https://', '').replace('http://', ''):
+        errors.append("RENDER_DOMAIN contiene doble barra (//) interna")
+    
     return errors
 
 # Validar al importar
@@ -68,3 +77,5 @@ if config_errors:
     for error in config_errors:
         print(f"  • {error}")
     print("\nConfigura las variables en Render.com → Environment Variables")
+else:
+    print(f"✅ Configuración validada: RENDER_DOMAIN={RENDER_DOMAIN}")
