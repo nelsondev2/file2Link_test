@@ -13,11 +13,15 @@ class FileService:
     def __init__(self):
         self.file_mappings = {}
         self.metadata_file = "file_metadata.json"
-        self.users_file = "users.json"  # NUEVO: Sistema de usuarios
-        self.hashes_file = "file_hashes.json"  # NUEVO: Hashes de seguridad
+        self.users_file = "users.json"
+        self.hashes_file = "file_hashes.json"
+        self.HASH_EXPIRE_DAYS = HASH_EXPIRE_DAYS  # ⬅️ ATRIBUTO AÑADIDO
+        
         self.load_metadata()
-        self.load_users()  # NUEVO
-        self.load_hashes()  # NUEVO
+        self.load_users()
+        self.load_hashes()
+        
+        logger.info(f"✅ FileService iniciado con HASH_EXPIRE_DAYS={self.HASH_EXPIRE_DAYS}")
     
     def load_metadata(self):
         """Carga la metadata de archivos desde JSON"""
@@ -39,7 +43,7 @@ class FileService:
         except Exception as e:
             logger.error(f"Error guardando metadata: {e}")
     
-    # ===== NUEVO: SISTEMA DE USUARIOS =====
+    # ===== SISTEMA DE USUARIOS =====
     def load_users(self):
         """Cargar usuarios desde JSON (como primer bot)"""
         try:
@@ -102,7 +106,7 @@ class FileService:
             return True
         return False
     
-    # ===== NUEVO: SISTEMA DE HASHES DE SEGURIDAD =====
+    # ===== SISTEMA DE HASHES DE SEGURIDAD =====
     def load_hashes(self):
         """Cargar hashes de seguridad"""
         try:
@@ -139,11 +143,11 @@ class FileService:
             'filename': filename,
             'file_type': file_type,
             'created_at': timestamp,
-            'expires_at': timestamp + (HASH_EXPIRE_DAYS * 24 * 3600)
+            'expires_at': timestamp + (self.HASH_EXPIRE_DAYS * 24 * 3600)  # ⬅️ USAR self.
         }
         
         self.save_hashes()
-        logger.info(f"🔐 Hash creado para {filename}: {file_hash}")
+        logger.info(f"🔐 Hash creado para {filename}: {file_hash} (expira en {self.HASH_EXPIRE_DAYS} días)")
         return file_hash
     
     def verify_hash(self, file_hash):
@@ -510,5 +514,37 @@ class FileService:
         except Exception as e:
             logger.error(f"Error limpiando hashes: {e}")
             return 0
+
+    def get_statistics(self):
+        """Obtener estadísticas del sistema"""
+        try:
+            total_users = self.total_users_count()
+            total_files_downloads = 0
+            total_files_packed = 0
+            total_size = 0
+            
+            for user_id in self.users:
+                user_id_int = int(user_id)
+                downloads = len(self.list_user_files(user_id_int, "downloads"))
+                packed = len(self.list_user_files(user_id_int, "packed"))
+                user_size = self.get_user_storage_usage(user_id_int)
+                
+                total_files_downloads += downloads
+                total_files_packed += packed
+                total_size += user_size
+            
+            return {
+                'total_users': total_users,
+                'total_files': total_files_downloads + total_files_packed,
+                'total_files_downloads': total_files_downloads,
+                'total_files_packed': total_files_packed,
+                'total_size_bytes': total_size,
+                'total_size_mb': total_size / (1024 * 1024),
+                'active_hashes': len(self.file_hashes),
+                'hash_expire_days': self.HASH_EXPIRE_DAYS
+            }
+        except Exception as e:
+            logger.error(f"Error obteniendo estadísticas: {e}")
+            return {}
 
 file_service = FileService()
