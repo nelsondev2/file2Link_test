@@ -17,7 +17,7 @@ from progress_service import progress_service
 from packing_service import packing_service
 from download_service import fast_download_service
 from filename_utils import safe_filename, clean_for_filesystem, clean_for_url
-from url_utils import fix_problematic_filename  # NUEVO IMPORT
+from url_utils import fix_problematic_filename
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,7 @@ user_batch_totals = {}
 user_queue_locks = {}
 user_progress_messages = {}
 user_completed_files = {}
+user_progress_data = {}
 
 # Estadísticas globales
 global_stats = {
@@ -725,6 +726,9 @@ async def clear_queue_command(client, message):
         if user_id in user_completed_files:
             del user_completed_files[user_id]
         
+        if user_id in user_progress_data:
+            del user_progress_data[user_id]
+        
         await message.reply_text(f"🗑️ **Cola limpiada**\n\nSe removieron {queue_size} archivos de la cola.")
         
     except Exception as e:
@@ -761,7 +765,7 @@ async def cleanup_command(client, message):
         logger.error(f"Error en comando cleanup: {e}")
         await message.reply_text("❌ Error durante la limpieza.")
 
-# ===== SISTEMA DE COLA MEJORADO CON MANEJO DE NOMBRES PROBLEMÁTICOS =====
+# ===== SISTEMA DE COLA CON PROGRESO INDIVIDUAL POR ARCHIVO =====
 async def handle_file(client, message):
     """Maneja la recepción de archivos con sistema de cola"""
     try:
@@ -824,7 +828,7 @@ async def handle_file(client, message):
         logger.error(f"Error procesando archivo: {e}", exc_info=True)
 
 async def process_file_queue(client, user_id):
-    """Procesa la cola de archivos del usuario mostrando un único progreso"""
+    """Procesa la cola de archivos del usuario con progreso individual"""
     try:
         async with get_user_queue_lock(user_id):
             total_files_in_batch = len(user_queues[user_id])
@@ -834,37 +838,8 @@ async def process_file_queue(client, user_id):
             user_batch_totals[user_id] = total_files_in_batch
             user_current_processing[user_id] = True
             
-            # Inicializar lista de archivos completados para este batch
+            # Inicializar lista de archivos completados
             user_completed_files[user_id] = []
-            
-            # Crear mensaje de progreso inicial
-            if user_id not in user_progress_messages:
-                progress_text = create_batch_progress_text(user_id, 0, total_files_in_batch, [])
-                progress_msg = await client.send_message(
-                    user_id,
-                    progress_text,
-                    disable_web_page_preview=True
-                )
-                user_progress_messages[user_id] = progress_msg.id
-            else:
-                # Actualizar mensaje existente
-                try:
-                    progress_text = create_batch_progress_text(user_id, 0, total_files_in_batch, [])
-                    await client.edit_message_text(
-                        chat_id=user_id,
-                        message_id=user_progress_messages[user_id],
-                        text=progress_text,
-                        disable_web_page_preview=True
-                    )
-                except:
-                    # Si hay error, crear nuevo mensaje
-                    progress_text = create_batch_progress_text(user_id, 0, total_files_in_batch, [])
-                    progress_msg = await client.send_message(
-                        user_id,
-                        progress_text,
-                        disable_web_page_preview=True
-                    )
-                    user_progress_messages[user_id] = progress_msg.id
             
             current_position = 0
             completed_files = []
@@ -879,39 +854,22 @@ async def process_file_queue(client, user_id):
                 current_position += 1
                 
                 try:
-                    # Pequeña pausa para estabilidad
-                    await asyncio.sleep(0.5)
-                    
-                    # Procesar el archivo individualmente
-                    result = await process_single_file_in_batch(
+                    # Procesar el archivo individualmente con progreso
+                    result = await process_file_with_progress(
                         client, message, user_id, 
                         current_position, total_files_in_batch
                     )
                     
                     if result:
                         completed_files.append(result)
-                        
-                        # Actualizar progreso
-                        progress_text = create_batch_progress_text(
-                            user_id, current_position, total_files_in_batch, completed_files
-                        )
-                        
-                        try:
-                            await client.edit_message_text(
-                                chat_id=user_id,
-                                message_id=user_progress_messages[user_id],
-                                text=progress_text,
-                                disable_web_page_preview=True
-                            )
-                        except Exception as e:
-                            logger.warning(f"No se pudo actualizar progreso: {e}")
+                    
+                    # Pequeña pausa entre archivos para estabilidad
+                    if current_position < total_files_in_batch:
+                        await asyncio.sleep(0.3)
                     
                 except Exception as e:
                     logger.error(f"Error procesando archivo #{current_position}: {e}")
                     continue
-                
-                # Pequeña pausa entre archivos
-                await asyncio.sleep(0.5)
             
             # Al finalizar todos los archivos, mostrar resumen con enlaces
             if completed_files:
@@ -924,37 +882,10 @@ async def process_file_queue(client, user_id):
         logger.error(f"Error en process_file_queue: {e}", exc_info=True)
         cleanup_user_session(user_id)
 
-def create_batch_progress_text(user_id, current_position, total_files, completed_files):
-    """Crea el texto del progreso del batch"""
-    progress_percent = (current_position / total_files * 100) if total_files > 0 else 0
-    bar_length = 15
-    filled_length = int(bar_length * current_position / total_files) if total_files > 0 else 0
-    bar = '█' * filled_length + '░' * (bar_length - filled_length)
+async def process_file_with_progress(client, message, user_id, current_position, total_files):
+    """Procesa un archivo mostrando solo progreso DURANTE la subida"""
+    start_time = time.time()
     
-    text = f"""📦 **Procesando {total_files} archivos**
-
-`[{bar}] {progress_percent:.1f}%`
-**Progreso:** {current_position}/{total_files} archivos completados
-
-"""
-    
-    if current_position > 0 and completed_files:
-        text += "**📋 Archivos completados:**\n"
-        for i, file_info in enumerate(completed_files, 1):
-            # Mostrar nombre truncado si es muy largo
-            display_name = file_info['display_name']
-            text += f"{i}. `{display_name}` ({file_info['size_mb']:.1f} MB) ✅\n"
-    
-    if current_position < total_files:
-        remaining = total_files - current_position
-        text += f"\n**⏳ Procesando próximo archivo...** ({remaining} restantes)"
-    else:
-        text += "\n**✅ ¡Procesamiento completado!**\nGenerando enlaces..."
-    
-    return text
-
-async def process_single_file_in_batch(client, message, user_id, current_position, total_files):
-    """Procesa un solo archivo dentro de un batch - CON MANEJO DE NOMBRES PROBLEMÁTICOS"""
     try:
         file_obj = None
         original_filename = None
@@ -984,16 +915,16 @@ async def process_single_file_in_batch(client, message, user_id, current_positio
 
         user_dir = file_service.get_user_directory(user_id, "downloads")
         
-        # MEJORADO: Manejo de nombres problemáticos
+        # Manejo de nombres problemáticos
         stored_filename = safe_filename(original_filename, user_id)
         
         # Verificar si el nombre todavía tiene problemas
         from filename_utils import is_filename_safe
         if not is_filename_safe(stored_filename):
             # Generar nombre completamente seguro
-            import time
+            import time as t
             import random
-            timestamp = int(time.time())
+            timestamp = int(t.time())
             random_num = random.randint(1000, 9999)
             
             # Obtener extensión
@@ -1013,25 +944,120 @@ async def process_single_file_in_batch(client, message, user_id, current_positio
             file_path = os.path.join(user_dir, stored_filename)
             counter += 1
 
-        # Registrar archivo con el nombre ORIGINAL pero almacenado con nombre seguro
+        # Registrar archivo
         file_number = file_service.register_file(user_id, original_filename, stored_filename, "downloads")
         
-        # Descargar archivo sin mostrar progreso individual
+        # Solo crear mensaje de progreso para el PRIMER archivo
+        if current_position == 1 and user_id not in user_progress_messages:
+            progress_text = progress_service.create_progress_message(
+                filename=original_filename,
+                current=0,
+                total=file_size,
+                speed=0,
+                user_first_name=message.from_user.first_name,
+                process_type="Subiendo",
+                current_file=current_position,
+                total_files=total_files
+            )
+            
+            progress_msg = await client.send_message(
+                user_id,
+                progress_text,
+                disable_web_page_preview=True
+            )
+            user_progress_messages[user_id] = progress_msg.id
+            user_progress_data[user_id] = {
+                'last_update': 0,
+                'last_speed': 0,
+                'start_time': start_time,
+                'current_position': current_position,
+                'total_files': total_files
+            }
+        
+        # Actualizar datos de progreso para el archivo actual
+        if user_id in user_progress_data:
+            user_progress_data[user_id].update({
+                'current_position': current_position,
+                'current_filename': original_filename,
+                'current_filesize': file_size,
+                'start_time': start_time,
+                'last_speed': 0,
+                'last_update': 0
+            })
+        
+        async def progress_callback(current, total):
+            try:
+                elapsed_time = time.time() - start_time
+                speed = current / elapsed_time if elapsed_time > 0 else 0
+                
+                # Suavizar velocidad
+                if user_id in user_progress_data:
+                    last_speed = user_progress_data[user_id].get('last_speed', 0)
+                    smoothed_speed = 0.7 * last_speed + 0.3 * speed
+                    user_progress_data[user_id]['last_speed'] = smoothed_speed
+
+                    current_time = time.time()
+                    last_update = user_progress_data[user_id].get('last_update', 0)
+
+                    if current_time - last_update >= 0.5 or current == total:
+                        # Solo actualizar si es el archivo actual
+                        if user_progress_data[user_id].get('current_position') == current_position:
+                            progress_message = progress_service.create_progress_message(
+                                filename=original_filename,
+                                current=current,
+                                total=total,
+                                speed=smoothed_speed,
+                                user_first_name=message.from_user.first_name,
+                                process_type="Subiendo",
+                                current_file=current_position,
+                                total_files=total_files
+                            )
+
+                            try:
+                                await client.edit_message_text(
+                                    chat_id=user_id,
+                                    message_id=user_progress_messages[user_id],
+                                    text=progress_message,
+                                    disable_web_page_preview=True
+                                )
+                                user_progress_data[user_id]['last_update'] = current_time
+                            except Exception as edit_error:
+                                logger.warning(f"No se pudo editar mensaje de progreso: {edit_error}")
+
+            except Exception as e:
+                logger.error(f"Error en progress callback: {e}")
+        
+        # Descargar archivo con progreso
         success, downloaded = await fast_download_service.download_with_retry(
             client=client,
             message=message,
             file_path=file_path,
-            progress_callback=None
+            progress_callback=progress_callback
         )
 
         if not success or not os.path.exists(file_path):
+            # Solo mostrar error si es el último archivo
+            if current_position == total_files and user_id in user_progress_messages:
+                error_text = f"❌ **Error al subir archivo**\n\n`{original_filename}`\n\nEl archivo no se descargó correctamente."
+                try:
+                    await client.edit_message_text(
+                        chat_id=user_id,
+                        message_id=user_progress_messages[user_id],
+                        text=error_text,
+                        disable_web_page_preview=True
+                    )
+                except:
+                    pass
             return None
 
         final_size = os.path.getsize(file_path)
         size_mb = final_size / (1024 * 1024)
         
-        # Generar URL con hash usando el nombre ALMACENADO (seguro)
+        # Generar URL con hash
         download_url = file_service.create_download_url(user_id, stored_filename)
+        
+        # NO mostrar nada entre archivos
+        # Solo pasar al siguiente archivo en silencio
         
         # Actualizar estadísticas globales
         update_global_stats(bytes_received=final_size, files_received=1)
@@ -1040,9 +1066,9 @@ async def process_single_file_in_batch(client, message, user_id, current_positio
         
         return {
             'number': file_number,
-            'name': original_filename,  # Nombre original para mostrar
+            'name': original_filename,
             'display_name': original_filename[:40] + "..." if len(original_filename) > 40 else original_filename,
-            'stored_name': stored_filename,  # Nombre seguro almacenado
+            'stored_name': stored_filename,
             'size_mb': size_mb,
             'url': download_url,
             'position': current_position
@@ -1050,6 +1076,20 @@ async def process_single_file_in_batch(client, message, user_id, current_positio
 
     except Exception as e:
         logger.error(f"Error procesando archivo individual: {e}", exc_info=True)
+        
+        # Solo mostrar error si es el último archivo
+        if current_position == total_files and user_id in user_progress_messages:
+            error_text = f"❌ **Error procesando archivo**\n\n`{original_filename if 'original_filename' in locals() else 'Archivo'}`\n\n{str(e)[:100]}"
+            try:
+                await client.edit_message_text(
+                    chat_id=user_id,
+                    message_id=user_progress_messages[user_id],
+                    text=error_text,
+                    disable_web_page_preview=True
+                )
+            except:
+                pass
+        
         return None
 
 async def show_final_summary(client, user_id, completed_files):
@@ -1058,12 +1098,22 @@ async def show_final_summary(client, user_id, completed_files):
         if not completed_files:
             return
         
+        # Eliminar el mensaje de progreso si existe
+        if user_id in user_progress_messages:
+            try:
+                await client.delete_messages(
+                    chat_id=user_id,
+                    message_ids=user_progress_messages[user_id]
+                )
+            except:
+                pass
+        
         # Crear mensaje de resumen
         summary_text = f"""✅ **¡Procesamiento completado!**
 
 **📊 Resumen:**
-• **Total de archivos:** {len(completed_files)}
-• **Archivos procesados exitosamente:** {len(completed_files)}
+• **Total de archivos procesados:** {len(completed_files)}
+• **Archivos exitosos:** {len(completed_files)}
 
 **🔗 Enlaces de descarga:**
 """
@@ -1078,7 +1128,7 @@ async def show_final_summary(client, user_id, completed_files):
         
         summary_text += f"\n**📁 Ubicación:** Carpeta `downloads`"
         summary_text += f"\n**📋 Comando:** `/list` para ver todos tus archivos"
-        summary_text += f"\n\n**⚠️ Nota:** Si algún enlace no funciona, usa `/rename` para cambiar el nombre del archivo"
+        summary_text += f"\n**✏️ Renombrar:** `/rename <número> <nuevo_nombre>` si algún enlace no funciona"
         
         # Si el mensaje es muy largo, dividirlo
         if len(summary_text) > 4000:
@@ -1132,6 +1182,8 @@ def cleanup_user_session(user_id):
         del user_progress_messages[user_id]
     if user_id in user_completed_files:
         del user_completed_files[user_id]
+    if user_id in user_progress_data:
+        del user_progress_data[user_id]
 
 def setup_handlers(client):
     """Configura todos los handlers del bot"""
