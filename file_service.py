@@ -6,7 +6,8 @@ import time
 import logging
 import sys
 from config import BASE_DIR, RENDER_DOMAIN, HASH_SALT, HASH_EXPIRE_DAYS
-from filename_utils import clean_for_url, clean_for_filesystem, get_url_safe_name  # NUEVO IMPORT
+from filename_utils import clean_for_url, clean_for_filesystem, get_url_safe_name
+from url_utils import fix_problematic_filename, encode_filename_for_url  # NUEVO IMPORT
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ class FileService:
     
     # ===== SISTEMA DE USUARIOS =====
     def load_users(self):
-        """Cargar usuarios desde JSON (como primer bot)"""
+        """Cargar usuarios desde JSON"""
         try:
             if os.path.exists(self.users_file):
                 with open(self.users_file, 'r', encoding='utf-8') as f:
@@ -66,7 +67,7 @@ class FileService:
             logger.error(f"Error guardando usuarios: {e}")
     
     def total_users_count(self):
-        """Contar usuarios totales (como primer bot)"""
+        """Contar usuarios totales"""
         return len(self.users)
     
     def is_user_exist(self, user_id):
@@ -96,11 +97,11 @@ class FileService:
             return False
     
     def get_all_users(self):
-        """Obtener todos los usuarios (para broadcast)"""
+        """Obtener todos los usuarios"""
         return list(self.users.values())
     
     def delete_user(self, user_id):
-        """Eliminar usuario (como primer bot)"""
+        """Eliminar usuario"""
         if str(user_id) in self.users:
             del self.users[str(user_id)]
             self.save_users()
@@ -129,7 +130,7 @@ class FileService:
             logger.error(f"Error guardando hashes: {e}")
     
     def create_file_hash(self, user_id, filename, file_type="downloads"):
-        """Crear hash único de seguridad (como primer bot)"""
+        """Crear hash único de seguridad"""
         # Crear hash único basado en múltiples factores
         timestamp = int(time.time())
         random_part = os.urandom(8).hex()
@@ -152,7 +153,7 @@ class FileService:
         return file_hash
     
     def verify_hash(self, file_hash):
-        """Verificar validez del hash (como primer bot)"""
+        """Verificar validez del hash"""
         if file_hash not in self.file_hashes:
             return False, "Hash no encontrado"
         
@@ -167,7 +168,7 @@ class FileService:
         return True, hash_data
     
     def get_next_file_number(self, user_id, file_type="downloads"):
-        """Obtiene el siguiente número de archivo para el usuario (PERSISTENTE)"""
+        """Obtiene el siguiente número de archivo para el usuario"""
         user_key = f"{user_id}_{file_type}"
         if user_key not in self.metadata:
             self.metadata[user_key] = {"next_number": 1, "files": {}}
@@ -178,7 +179,7 @@ class FileService:
         return next_num
     
     def sanitize_filename(self, filename):
-        """Limpia el nombre de archivo para que sea URL-safe - USANDO filename_utils"""
+        """Limpia el nombre de archivo para que sea URL-safe"""
         return clean_for_url(filename)
 
     def format_bytes(self, size):
@@ -190,24 +191,45 @@ class FileService:
         return f"{size:.1f} TB"
 
     def create_download_url(self, user_id, filename):
-        """Crea una URL de descarga segura CON HASH - CORREGIDO"""
-        # Usar clean_for_url en lugar de sanitize_filename para consistencia
-        safe_filename = clean_for_url(filename)
+        """Crea una URL de descarga segura CON HASH - MEJORADA"""
+        # Primero verificar si el nombre tiene caracteres problemáticos
+        from filename_utils import safe_filename as generate_safe_name
+        from url_utils import is_url_safe
+        
+        # Verificar si el nombre es seguro para URL
+        if not is_url_safe(filename):
+            # Generar un nombre seguro alternativo
+            safe_filename = generate_safe_name(filename, user_id)
+            logger.warning(f"Nombre problemático detectado: {filename} -> {safe_filename}")
+        else:
+            safe_filename = clean_for_url(filename)
+        
         file_hash = self.create_file_hash(user_id, safe_filename, "downloads")
         
-        # Codificar nombre para URL
-        encoded_filename = get_url_safe_name(safe_filename)
+        # Codificar nombre para URL usando la nueva utilidad
+        encoded_filename = encode_filename_for_url(safe_filename)
         
         # Asegurar que RENDER_DOMAIN no termine con /
         base_url = RENDER_DOMAIN.rstrip('/')
         return f"{base_url}/download/{file_hash}?file={encoded_filename}"
 
     def create_packed_url(self, user_id, filename):
-        """Crea una URL para archivos empaquetados CON HASH - CORREGIDO"""
-        safe_filename = clean_for_url(filename)
+        """Crea una URL para archivos empaquetados CON HASH - MEJORADA"""
+        # Primero verificar si el nombre tiene caracteres problemáticos
+        from filename_utils import safe_filename as generate_safe_name
+        from url_utils import is_url_safe
+        
+        # Verificar si el nombre es seguro para URL
+        if not is_url_safe(filename):
+            # Generar un nombre seguro alternativo
+            safe_filename = generate_safe_name(filename, user_id)
+            logger.warning(f"Nombre problemático detectado (packed): {filename} -> {safe_filename}")
+        else:
+            safe_filename = clean_for_url(filename)
+        
         file_hash = self.create_file_hash(user_id, safe_filename, "packed")
         
-        encoded_filename = get_url_safe_name(safe_filename)
+        encoded_filename = encode_filename_for_url(safe_filename)
         
         # Asegurar que RENDER_DOMAIN no termine con /
         base_url = RENDER_DOMAIN.rstrip('/')
@@ -301,7 +323,7 @@ class FileService:
         return file_num
 
     def get_file_by_number(self, user_id, file_number, file_type="downloads"):
-        """Obtiene información de archivo por número (PERSISTENTE)"""
+        """Obtiene información de archivo por número"""
         user_key = f"{user_id}_{file_type}"
         if user_key not in self.metadata:
             return None
