@@ -2,6 +2,13 @@ import re
 import os
 import urllib.parse
 
+logger = None
+try:
+    import logging
+    logger = logging.getLogger(__name__)
+except:
+    pass
+
 def clean_for_filesystem(filename):
     """
     Limpia nombres para sistema de archivos.
@@ -40,15 +47,43 @@ def clean_for_url(filename):
     """
     Limpia nombres para URLs.
     Más permisivo que para filesystem.
-    Mantiene la mayoría de caracteres, solo elimina los que rompen URLs.
+    Maneja caracteres como apóstrofes, comillas, etc.
     """
     if not filename:
         return "archivo"
     
-    # Solo caracteres que realmente rompen URLs
-    # Los caracteres # % & { } $ ! ' ` = + pueden causar problemas en URLs
-    problem_chars = r'[#%&{}$!\'`=+<>:"/\\|?*]'
-    cleaned = re.sub(problem_chars, '_', filename)
+    # Caracteres problemáticos para URLs
+    # Los caracteres # % & { } $ ! ' ` = + < > : " / \ | ? * pueden causar problemas en URLs
+    # Pero mantenemos algunos como apóstrofes para nombres naturales
+    
+    # Primero, caracteres que realmente rompen URLs
+    dangerous_chars = r'[#%&{}<>:"/\\|?*]'
+    cleaned = re.sub(dangerous_chars, '_', filename)
+    
+    # Caracteres que pueden causar problemas pero son comunes en nombres
+    # Los mantenemos pero con manejo especial
+    common_chars_to_keep = ["'", "`", "=", "+", "!", "$"]
+    
+    # Para estos caracteres comunes, reemplazamos con versiones seguras
+    char_replacements = {
+        "'": "",        # Eliminar apóstrofes completamente
+        "`": "",        # Eliminar backticks
+        '"': "",        # Eliminar comillas
+        "´": "",        # Eliminar acento agudo
+        "!": "",        # Eliminar exclamación
+        "$": "",        # Eliminar signo dólar
+        "=": "_",       # Reemplazar igual con guión bajo
+        "+": "_",       # Reemplazar más con guión bajo
+        "&": "y",       # Reemplazar & con 'y'
+        "@": "en",      # Reemplazar @ con 'en'
+    }
+    
+    for char, replacement in char_replacements.items():
+        cleaned = cleaned.replace(char, replacement)
+    
+    # Eliminar múltiples espacios o guiones bajos consecutivos
+    cleaned = re.sub(r'_{2,}', '_', cleaned)
+    cleaned = re.sub(r'\s{2,}', ' ', cleaned)
     
     # Limitar longitud para URLs
     if len(cleaned) > 150:
@@ -78,13 +113,20 @@ def safe_filename(original_name, user_id=None):
         _, original_ext = os.path.splitext(original_name)
         ext = original_ext
     
-    # Si el nombre es muy genérico, añadir identificador
+    # Si el nombre es muy genérico o tiene caracteres problemáticos, añadir identificador
     generic_names = ['archivo', 'file', 'documento', 'document', 'imagen', 'image', 
                     'video', 'audio', 'foto', 'photo', 'picture', 'img']
     
-    if name_part.lower() in generic_names:
+    # Si el nombre original tiene caracteres problemáticos comunes, usar nombre más seguro
+    problem_chars_in_name = any(char in original_name for char in ["'", '"', "`", "!", "@", "#", "$", "%", "&", "*", "+", "="])
+    
+    if name_part.lower() in generic_names or problem_chars_in_name:
         import time
-        name_part = f"{name_part}_{int(time.time()) % 10000}"
+        import random
+        # Crear nombre más seguro con timestamp
+        timestamp = int(time.time()) % 10000
+        random_num = random.randint(100, 999)
+        name_part = f"file_{timestamp}_{random_num}"
     
     # Combinar
     final_name = name_part + (ext if ext else '')
@@ -129,24 +171,42 @@ def is_filename_safe(filename):
     return True
 
 def get_url_safe_name(filename):
-    """Obtiene nombre seguro para URL y lo codifica"""
+    """Obtiene nombre seguro para URL y lo codifica CORRECTAMENTE"""
+    # Primero limpiar el nombre
     safe_name = clean_for_url(filename)
-    return urllib.parse.quote(safe_name)
+    
+    # Codificar SOLO los caracteres necesarios
+    # No codificar todo el string, solo caracteres especiales específicos
+    encoded_name = urllib.parse.quote(safe_name, safe='')
+    
+    return encoded_name
 
 def compare_filenames(disk_name, url_name):
     """Compara si dos nombres (disco vs URL) son equivalentes"""
-    # Normalizar ambos nombres
-    disk_clean = clean_for_filesystem(disk_name)
-    url_clean = clean_for_url(url_name)
-    
-    # Comparar sin extensiones
-    disk_base, disk_ext = os.path.splitext(disk_clean)
-    url_base, url_ext = os.path.splitext(url_clean)
-    
-    # Las extensiones deben coincidir (case insensitive)
-    if disk_ext.lower() != url_ext.lower():
+    try:
+        # Decodificar el nombre de la URL
+        decoded_url_name = urllib.parse.unquote(url_name)
+        
+        # Normalizar ambos nombres
+        disk_clean = clean_for_filesystem(disk_name)
+        url_clean = clean_for_url(decoded_url_name)
+        
+        # Comparar sin extensiones
+        disk_base, disk_ext = os.path.splitext(disk_clean)
+        url_base, url_ext = os.path.splitext(url_clean)
+        
+        # Las extensiones deben coincidir (case insensitive)
+        if disk_ext.lower() != url_ext.lower():
+            return False
+        
+        # Para las bases, comparar después de limpiar caracteres problemáticos
+        # Eliminar caracteres problemáticos de ambos para comparación
+        disk_base_clean = re.sub(r'[\'"`!@#$%^&*()+=]', '', disk_base.lower())
+        url_base_clean = re.sub(r'[\'"`!@#$%^&*()+=]', '', url_base.lower())
+        
+        return disk_base_clean == url_base_clean
+        
+    except Exception as e:
+        if logger:
+            logger.error(f"Error comparando nombres: {e}")
         return False
-    
-    # Las bases deben ser similares (pero pueden diferir por limpieza)
-    # Para propósitos prácticos, si uno está contenido en el otro
-    return disk_base in url_base or url_base in disk_base
