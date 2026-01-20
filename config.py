@@ -38,13 +38,9 @@ HASH_SALT = os.getenv("HASH_SALT", "nelson_file2link_secure_salt")
 HASH_EXPIRE_DAYS = int(os.getenv("HASH_EXPIRE_DAYS", "30"))
 
 # Queue limits
-MAX_QUEUE_SIZE = 4
-MAX_CONCURRENT_UPLOADS = 1  # Procesar UNO POR UNO
+MAX_QUEUE_SIZE = 20
+MAX_CONCURRENT_UPLOADS = 1  # CAMBIADO: De 2 a 1 para procesar uno por uno
 QUEUE_PROCESSING_TIMEOUT = 3600
-
-# ===== TELEGRAM DATABASE CONFIGURATION =====
-DB_CHANNEL_ID = os.getenv("DB_CHANNEL_ID", "")  # ID del canal privado para DB
-# Ejemplo: -1001234567890 (con el -100 al inicio)
 
 # ===== VALIDACIÓN Y CORRECCIÓN AUTOMÁTICA =====
 # CORREGIR: Asegurar que RENDER_DOMAIN no termine con /
@@ -71,10 +67,6 @@ def validate_config():
     # Verificar que RENDER_DOMAIN no tenga doble barra
     if '//' in RENDER_DOMAIN.replace('https://', '').replace('http://', ''):
         errors.append("RENDER_DOMAIN contiene doble barra (//) interna")
-    
-    # Advertencia (no error) si no hay DB_CHANNEL_ID
-    if not DB_CHANNEL_ID:
-        print("⚠️ ADVERTENCIA: DB_CHANNEL_ID no configurado. Los datos NO serán persistentes en reinicios.")
     
     return errors
 
