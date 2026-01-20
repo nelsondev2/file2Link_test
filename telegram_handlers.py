@@ -174,6 +174,127 @@ async def users_command(client, message):
         logger.error(f"Error en /users: {e}")
         await message.reply_text("❌ Error obteniendo usuarios.")
 
+async def broadcast_command(client, message):
+    """Comando /broadcast - Envío masivo (como primer bot)"""
+    try:
+        user_id = message.from_user.id
+        
+        # Registrar usuario primero
+        if not file_service.is_user_exist(user_id):
+            file_service.add_user(user_id, message.from_user.first_name)
+        
+        # Verificar si es owner
+        if user_id not in OWNER_ID:
+            await message.reply_text("❌ Este comando es solo para administradores.")
+            return
+        
+        if not message.reply_to_message:
+            await message.reply_text(
+                "❌ **Debes responder a un mensaje para enviar como broadcast.**\n\n"
+                "**Uso:** Responde a cualquier mensaje con `/broadcast`"
+            )
+            return
+        
+        out = await message.reply_text(
+            "📢 **Broadcast iniciado!**\n\n"
+            "Se te notificará con el progreso.\n"
+            "Este proceso puede tardar varios minutos..."
+        )
+        
+        all_users = file_service.get_all_users()
+        broadcast_msg = message.reply_to_message
+        
+        start_time = time.time()
+        success = 0
+        failed = 0
+        done = 0
+        total = len(all_users)
+        
+        log_text = "# BROADCAST LOG\n\n"
+        
+        # Procesar en lotes para no sobrecargar
+        batch_size = 10
+        for i in range(0, total, batch_size):
+            batch = all_users[i:i + batch_size]
+            
+            for user in batch:
+                try:
+                    user_id = user['id']
+                    await broadcast_msg.copy(chat_id=user_id)
+                    success += 1
+                    log_text += f"{user_id}: ✅ Enviado\n"
+                except Exception as e:
+                    failed += 1
+                    error_msg = str(e)
+                    if "User is blocked" in error_msg:
+                        error_msg = "Usuario bloqueó el bot"
+                    elif "user deactivated" in error_msg.lower():
+                        error_msg = "Usuario desactivado"
+                        # Eliminar usuario desactivado
+                        file_service.delete_user(user_id)
+                    
+                    log_text += f"{user_id}: ❌ {error_msg[:50]}\n"
+                
+                done += 1
+            
+            # Actualizar progreso cada batch
+            progress_percent = (done / total) * 100
+            await out.edit_text(
+                f"📢 **Progreso del Broadcast:**\n\n"
+                f"`{'█' * int(progress_percent/5)}{'░' * (20 - int(progress_percent/5))}`\n"
+                f"**{progress_percent:.1f}%** ({done}/{total})\n\n"
+                f"✅ **Éxitos:** {success}\n"
+                f"❌ **Fallos:** {failed}\n"
+                f"⏱️ **Tiempo:** {time.time() - start_time:.1f}s"
+            )
+            
+            # Pequeña pausa entre batches
+            await asyncio.sleep(1)
+        
+        completed_in = time.time() - start_time
+        completion_text = (
+            f"✅ **Broadcast completado en {completed_in:.1f}s**\n\n"
+            f"👥 **Total usuarios:** {total}\n"
+            f"✅ **Enviados exitosamente:** {success}\n"
+            f"❌ **Fallos:** {failed}\n"
+            f"📊 **Tasa de éxito:** {(success/total*100):.1f}%"
+        )
+        
+        if failed == 0:
+            await message.reply_text(completion_text)
+        else:
+            # Guardar log en archivo temporal
+            timestamp = int(time.time())
+            log_file = f"broadcast_{timestamp}.txt"
+            
+            with open(log_file, 'w', encoding='utf-8') as f:
+                f.write(log_text)
+            
+            await message.reply_document(
+                document=log_file,
+                caption=completion_text
+            )
+            
+            os.remove(log_file)
+        
+        await out.delete()
+        
+        # Enviar a bin channel
+        await send_to_bin_channel(
+            client,
+            f"#BROADCAST_COMPLETED\n\n"
+            f"**Por:** [{message.from_user.first_name}](tg://user?id={message.from_user.id})\n"
+            f"**Usuarios:** {total}\n"
+            f"**Éxitos:** {success}\n"
+            f"**Fallos:** {failed}\n"
+            f"**Duración:** {completed_in:.1f}s\n"
+            f"**Mensaje:** {broadcast_msg.text[:100] if broadcast_msg.text else 'Media message'}"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error en /broadcast: {e}")
+        await message.reply_text("❌ Error en broadcast.")
+
 async def stats_command(client, message):
     """Comando /stats - Estadísticas completas del sistema"""
     try:
@@ -918,7 +1039,7 @@ async def cleanup_command(client, message):
 
 # ===== NUEVO: SISTEMA DE COLA MEJORADO =====
 async def handle_file(client, message):
-    """Maneja la recepción de archivos con sistema de cola - SOLO ELIMINADO MENSAJE DE CONFIRMACIÓN"""
+    """Maneja la recepción de archivos con sistema de cola UNO POR UNO"""
     try:
         user = message.from_user
         user_id = user.id
@@ -968,8 +1089,24 @@ async def handle_file(client, message):
             )
             return
         
-        # Agregar a cola - SIN ENVIAR MENSAJE DE CONFIRMACIÓN
+        # Agregar a cola
         user_queues[user_id].append(message)
+        new_queue_size = len(user_queues[user_id])
+        
+        # Confirmar recepción
+        file_name = "Archivo"
+        if message.document and message.document.file_name:
+            file_name = message.document.file_name
+        elif message.video and message.video.file_name:
+            file_name = message.video.file_name
+        
+        await message.reply_text(
+            f"✅ **Archivo recibido**\n\n"
+            f"**Nombre:** `{file_name[:50]}`\n"
+            f"**Tamaño:** {file_service.format_bytes(file_size)}\n"
+            f"**En cola:** #{new_queue_size}\n\n"
+            f"Se procesará en orden. Usa `/queue` para ver estado."
+        )
         
         # Iniciar procesamiento si no hay otro en curso
         if user_id not in user_current_processing:
@@ -977,6 +1114,10 @@ async def handle_file(client, message):
         
     except Exception as e:
         logger.error(f"Error procesando archivo: {e}", exc_info=True)
+        try:
+            await message.reply_text("❌ Error al procesar el archivo.")
+        except:
+            pass
 
 async def process_file_queue(client, user_id):
     """Procesa la cola de archivos del usuario UNO POR UNO respetando el orden"""
@@ -999,7 +1140,7 @@ async def process_file_queue(client, user_id):
                 message = user_queues[user_id].pop(0)
                 current_position += 1
                 
-                # Procesar el archivo individualmente CON PROGRESO
+                # Procesar el archivo individualmente
                 await process_single_file(
                     client, message, user_id, 
                     current_position, total_files_in_batch
@@ -1020,7 +1161,7 @@ async def process_file_queue(client, user_id):
             del user_batch_totals[user_id]
 
 async def process_single_file(client, message, user_id, current_position, total_files):
-    """Procesa un solo archivo con progreso MEJORADO y descarga rápida - MANTIENE EL PROGRESO"""
+    """Procesa un solo archivo con progreso MEJORADO y descarga rápida - USANDO filename_utils"""
     max_retries = 3
     start_time = time.time()
     
@@ -1056,11 +1197,12 @@ async def process_single_file(client, message, user_id, current_position, total_
 
         if not file_obj:
             logger.error("No se pudo obtener el objeto de archivo")
+            await message.reply_text("❌ Error: No se pudo identificar el archivo.")
             return
 
         user_dir = file_service.get_user_directory(user_id, "downloads")
         
-        # Usar safe_filename de filename_utils
+        # NUEVO: Usar safe_filename de filename_utils
         stored_filename = safe_filename(original_filename)
         
         # Verificar si el nombre es seguro
@@ -1084,7 +1226,6 @@ async def process_single_file(client, message, user_id, current_position, total_
         file_number = file_service.register_file(user_id, original_filename, stored_filename, "downloads")
         logger.info(f"📝 Archivo registrado: #{file_number} - {original_filename} -> {stored_filename}")
 
-        # INICIALIZAR MENSAJE DE PROGRESO (SE MANTIENE)
         initial_message = progress_service.create_progress_message(
             filename=original_filename,
             current=0,
@@ -1143,7 +1284,7 @@ async def process_single_file(client, message, user_id, current_position, total_
                 client=client,
                 message=message,
                 file_path=file_path,
-                progress_callback=progress_callback  # CON PROGRESO
+                progress_callback=progress_callback
             )
 
             if not success or not os.path.exists(file_path):
@@ -1228,6 +1369,7 @@ def setup_handlers(client):
     
     # Comandos de administración (solo owners)
     client.on_message(filters.command("users") & filters.private)(users_command)
+    client.on_message(filters.command("broadcast") & filters.private)(broadcast_command)
     
     # Comandos de navegación
     client.on_message(filters.command("cd") & filters.private)(cd_command)
@@ -1246,7 +1388,7 @@ def setup_handlers(client):
     # Comandos de limpieza
     client.on_message(filters.command("cleanup") & filters.private)(cleanup_command)
     
-    # Manejo de archivos (SOLO SIN MENSAJE DE CONFIRMACIÓN, CON PROGRESO)
+    # Manejo de archivos
     client.on_message(
         (filters.document | filters.video | filters.audio | filters.photo) &
         filters.private
