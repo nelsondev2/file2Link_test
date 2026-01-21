@@ -5,9 +5,10 @@ import json
 import time
 import logging
 import sys
-from config import BASE_DIR, RENDER_DOMAIN, HASH_SALT, HASH_EXPIRE_DAYS
+from collections import OrderedDict
+from config import BASE_DIR, RENDER_DOMAIN, HASH_SALT, HASH_EXPIRE_DAYS, MAX_CACHED_USERS, MAX_FILES_PER_USER
 from filename_utils import clean_for_url, clean_for_filesystem, get_url_safe_name
-from url_utils import fix_problematic_filename, encode_filename_for_url  # NUEVO IMPORT
+from url_utils import fix_problematic_filename, encode_filename_for_url
 
 logger = logging.getLogger(__name__)
 
@@ -23,14 +24,23 @@ class FileService:
         self.load_users()
         self.load_hashes()
         
-        logger.info(f"✅ FileService iniciado con HASH_EXPIRE_DAYS={self.HASH_EXPIRE_DAYS}")
+        # Limpieza inicial
+        self.cleanup_old_data()
+        
+        logger.info(f"✅ FileService iniciado con optimizaciones RAM")
+        logger.info(f"📊 Límites: {MAX_CACHED_USERS} usuarios, {MAX_FILES_PER_USER} archivos/usuario")
     
     def load_metadata(self):
-        """Carga la metadata de archivos desde JSON"""
+        """Carga la metadata de archivos desde JSON con límites"""
         try:
             if os.path.exists(self.metadata_file):
-                with open(self.metadata_file, 'r', encoding='utf-8') as f:
-                    self.metadata = json.load(f)
+                file_size = os.path.getsize(self.metadata_file)
+                if file_size > 10 * 1024 * 1024:  # 10MB límite
+                    logger.warning(f"Metadata file too large: {file_size} bytes, truncating")
+                    self.metadata = {}
+                else:
+                    with open(self.metadata_file, 'r', encoding='utf-8') as f:
+                        self.metadata = json.load(f)
             else:
                 self.metadata = {}
         except Exception as e:
@@ -38,8 +48,11 @@ class FileService:
             self.metadata = {}
     
     def save_metadata(self):
-        """Guarda la metadata de archivos en JSON"""
+        """Guarda la metadata de archivos en JSON optimizado"""
         try:
+            # Limitar tamaño antes de guardar
+            self.cleanup_old_data()
+            
             with open(self.metadata_file, 'w', encoding='utf-8') as f:
                 json.dump(self.metadata, f, ensure_ascii=False, indent=2)
         except Exception as e:
@@ -47,7 +60,7 @@ class FileService:
     
     # ===== SISTEMA DE USUARIOS =====
     def load_users(self):
-        """Cargar usuarios desde JSON"""
+        """Cargar usuarios desde JSON con límites"""
         try:
             if os.path.exists(self.users_file):
                 with open(self.users_file, 'r', encoding='utf-8') as f:
@@ -75,9 +88,16 @@ class FileService:
         return str(user_id) in self.users
     
     def add_user(self, user_id, user_first_name=""):
-        """Agregar nuevo usuario"""
+        """Agregar nuevo usuario con límites"""
+        user_key = str(user_id)
+        
         if not self.is_user_exist(user_id):
-            self.users[str(user_id)] = {
+            # Verificar límite de usuarios
+            if len(self.users) >= MAX_CACHED_USERS:
+                # Eliminar usuario más antiguo
+                self._remove_oldest_user()
+            
+            self.users[user_key] = {
                 'id': user_id,
                 'first_name': user_first_name,
                 'first_seen': time.time(),
@@ -90,11 +110,38 @@ class FileService:
             return True
         else:
             # Actualizar último acceso
-            self.users[str(user_id)]['last_seen'] = time.time()
+            self.users[user_key]['last_seen'] = time.time()
             if user_first_name:
-                self.users[str(user_id)]['first_name'] = user_first_name
+                self.users[user_key]['first_name'] = user_first_name
             self.save_users()
             return False
+    
+    def _remove_oldest_user(self):
+        """Eliminar usuario más antiguo"""
+        if not self.users:
+            return
+        
+        # Encontrar usuario con último acceso más antiguo
+        oldest_user = None
+        oldest_time = float('inf')
+        
+        for user_id, user_data in self.users.items():
+            last_seen = user_data.get('last_seen', 0)
+            if last_seen < oldest_time:
+                oldest_time = last_seen
+                oldest_user = user_id
+        
+        if oldest_user:
+            # Eliminar metadata del usuario
+            user_id_int = int(oldest_user)
+            for file_type in ['downloads', 'packed']:
+                user_key = f"{user_id_int}_{file_type}"
+                if user_key in self.metadata:
+                    del self.metadata[user_key]
+            
+            # Eliminar usuario
+            del self.users[oldest_user]
+            logger.info(f"🧹 Usuario antiguo eliminado por límite: {oldest_user}")
     
     def get_all_users(self):
         """Obtener todos los usuarios"""
@@ -131,7 +178,6 @@ class FileService:
     
     def create_file_hash(self, user_id, filename, file_type="downloads"):
         """Crear hash único de seguridad"""
-        # Crear hash único basado en múltiples factores
         timestamp = int(time.time())
         random_part = os.urandom(8).hex()
         
@@ -149,7 +195,7 @@ class FileService:
         }
         
         self.save_hashes()
-        logger.info(f"🔐 Hash creado para {filename}: {file_hash} (expira en {self.HASH_EXPIRE_DAYS} días)")
+        logger.info(f"🔐 Hash creado para {filename}: {file_hash}")
         return file_hash
     
     def verify_hash(self, file_hash):
@@ -191,47 +237,36 @@ class FileService:
         return f"{size:.1f} TB"
 
     def create_download_url(self, user_id, filename):
-        """Crea una URL de descarga segura CON HASH - MEJORADA"""
-        # Primero verificar si el nombre tiene caracteres problemáticos
+        """Crea una URL de descarga segura CON HASH"""
         from filename_utils import safe_filename as generate_safe_name
         from url_utils import is_url_safe
         
-        # Verificar si el nombre es seguro para URL
         if not is_url_safe(filename):
-            # Generar un nombre seguro alternativo
             safe_filename = generate_safe_name(filename, user_id)
             logger.warning(f"Nombre problemático detectado: {filename} -> {safe_filename}")
         else:
             safe_filename = clean_for_url(filename)
         
         file_hash = self.create_file_hash(user_id, safe_filename, "downloads")
-        
-        # Codificar nombre para URL usando la nueva utilidad
         encoded_filename = encode_filename_for_url(safe_filename)
         
-        # Asegurar que RENDER_DOMAIN no termine con /
         base_url = RENDER_DOMAIN.rstrip('/')
         return f"{base_url}/download/{file_hash}?file={encoded_filename}"
 
     def create_packed_url(self, user_id, filename):
-        """Crea una URL para archivos empaquetados CON HASH - MEJORADA"""
-        # Primero verificar si el nombre tiene caracteres problemáticos
+        """Crea una URL para archivos empaquetados CON HASH"""
         from filename_utils import safe_filename as generate_safe_name
         from url_utils import is_url_safe
         
-        # Verificar si el nombre es seguro para URL
         if not is_url_safe(filename):
-            # Generar un nombre seguro alternativo
             safe_filename = generate_safe_name(filename, user_id)
             logger.warning(f"Nombre problemático detectado (packed): {filename} -> {safe_filename}")
         else:
             safe_filename = clean_for_url(filename)
         
         file_hash = self.create_file_hash(user_id, safe_filename, "packed")
-        
         encoded_filename = encode_filename_for_url(safe_filename)
         
-        # Asegurar que RENDER_DOMAIN no termine con /
         base_url = RENDER_DOMAIN.rstrip('/')
         return f"{base_url}/packed/{file_hash}?file={encoded_filename}"
 
@@ -258,7 +293,7 @@ class FileService:
         return total_size
 
     def list_user_files(self, user_id, file_type="downloads"):
-        """Lista archivos del usuario con numeración PERSISTENTE"""
+        """Lista archivos del usuario con límites"""
         user_dir = self.get_user_directory(user_id, file_type)
         if not os.path.exists(user_dir):
             return []
@@ -275,12 +310,15 @@ class FileService:
             
             existing_files.sort(key=lambda x: x[0])
             
+            # Limitar número de archivos mostrados
+            if len(existing_files) > MAX_FILES_PER_USER:
+                existing_files = existing_files[-MAX_FILES_PER_USER:]
+            
             for file_number, file_data in existing_files:
                 file_path = os.path.join(user_dir, file_data["stored_name"])
                 if os.path.isfile(file_path):
                     size = os.path.getsize(file_path)
                     
-                    # Generar URL con hash
                     if file_type == "downloads":
                         download_url = self.create_download_url(user_id, file_data["stored_name"])
                     else:
@@ -299,10 +337,15 @@ class FileService:
         return files
 
     def register_file(self, user_id, original_name, stored_name, file_type="downloads"):
-        """Registra un archivo en la metadata con número PERSISTENTE"""
+        """Registra un archivo en la metadata con límites"""
         user_key = f"{user_id}_{file_type}"
         if user_key not in self.metadata:
             self.metadata[user_key] = {"next_number": 1, "files": {}}
+        
+        # Verificar límite de archivos por usuario
+        if len(self.metadata[user_key]["files"]) >= MAX_FILES_PER_USER:
+            # Eliminar archivo más antiguo
+            self._remove_oldest_file(user_key)
         
         file_num = self.metadata[user_key]["next_number"]
         self.metadata[user_key]["next_number"] += 1
@@ -319,8 +362,46 @@ class FileService:
             self.users[str(user_id)]['files_count'] = self.users[str(user_id)].get('files_count', 0) + 1
             self.save_users()
         
-        logger.info(f"✅ Archivo registrado: #{file_num} - {original_name} para usuario {user_id}")
+        logger.info(f"✅ Archivo registrado: #{file_num} - {original_name}")
         return file_num
+    
+    def _remove_oldest_file(self, user_key):
+        """Eliminar archivo más antiguo del usuario"""
+        if user_key not in self.metadata:
+            return
+        
+        files = self.metadata[user_key]["files"]
+        if not files:
+            return
+        
+        # Encontrar archivo más antiguo
+        oldest_file = None
+        oldest_time = float('inf')
+        
+        for file_num, file_data in files.items():
+            registered_at = file_data.get('registered_at', 0)
+            if registered_at < oldest_time:
+                oldest_time = registered_at
+                oldest_file = file_num
+        
+        if oldest_file:
+            # Eliminar archivo físico si existe
+            file_data = files[oldest_file]
+            user_id = int(user_key.split('_')[0])
+            file_type = user_key.split('_')[1] if '_' in user_key else "downloads"
+            
+            user_dir = self.get_user_directory(user_id, file_type)
+            file_path = os.path.join(user_dir, file_data["stored_name"])
+            
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    logger.info(f"🧹 Archivo antiguo eliminado: {file_data['original_name']}")
+                except:
+                    pass
+            
+            # Eliminar de metadata
+            del files[oldest_file]
 
     def get_file_by_number(self, user_id, file_number, file_type="downloads"):
         """Obtiene información de archivo por número"""
@@ -540,6 +621,72 @@ class FileService:
             logger.error(f"Error limpiando hashes: {e}")
             return 0
 
+    def cleanup_old_data(self, force=False):
+        """Limpieza automática de datos antiguos"""
+        try:
+            # Limitar usuarios
+            if len(self.users) > MAX_CACHED_USERS:
+                users_to_remove = len(self.users) - MAX_CACHED_USERS
+                sorted_users = sorted(
+                    self.users.items(),
+                    key=lambda x: x[1].get('last_seen', 0)
+                )[:users_to_remove]
+                
+                for user_id, _ in sorted_users:
+                    user_id_int = int(user_id)
+                    # Eliminar metadata del usuario
+                    for file_type in ['downloads', 'packed']:
+                        user_key = f"{user_id_int}_{file_type}"
+                        if user_key in self.metadata:
+                            del self.metadata[user_key]
+                    
+                    # Eliminar usuario
+                    del self.users[user_id]
+                
+                logger.info(f"🧹 Usuarios antiguos eliminados: {users_to_remove}")
+                self.save_users()
+            
+            # Limitar archivos por usuario
+            for user_key in list(self.metadata.keys()):
+                if '_' not in user_key:
+                    continue
+                    
+                files = self.metadata[user_key].get("files", {})
+                if len(files) > MAX_FILES_PER_USER:
+                    # Ordenar por fecha de registro (más antiguos primero)
+                    sorted_files = sorted(
+                        files.items(),
+                        key=lambda x: x[1].get('registered_at', 0)
+                    )
+                    
+                    # Eliminar los más antiguos
+                    files_to_remove = sorted_files[:len(files) - MAX_FILES_PER_USER]
+                    
+                    for file_num, file_data in files_to_remove:
+                        # Intentar eliminar archivo físico
+                        try:
+                            user_id = int(user_key.split('_')[0])
+                            file_type = user_key.split('_')[1]
+                            user_dir = self.get_user_directory(user_id, file_type)
+                            file_path = os.path.join(user_dir, file_data["stored_name"])
+                            if os.path.exists(file_path):
+                                os.remove(file_path)
+                        except:
+                            pass
+                        
+                        # Eliminar de metadata
+                        del files[file_num]
+                    
+                    logger.info(f"🧹 Archivos antiguos eliminados para {user_key}: {len(files_to_remove)}")
+            
+            if force:
+                self.save_metadata()
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error en cleanup_old_data: {e}")
+            return False
+
     def get_statistics(self):
         """Obtener estadísticas del sistema"""
         try:
@@ -566,7 +713,13 @@ class FileService:
                 'total_size_bytes': total_size,
                 'total_size_mb': total_size / (1024 * 1024),
                 'active_hashes': len(self.file_hashes),
-                'hash_expire_days': self.HASH_EXPIRE_DAYS
+                'hash_expire_days': self.HASH_EXPIRE_DAYS,
+                'limits': {
+                    'max_users': MAX_CACHED_USERS,
+                    'max_files_per_user': MAX_FILES_PER_USER,
+                    'current_users': total_users,
+                    'optimized': True
+                }
             }
         except Exception as e:
             logger.error(f"Error obteniendo estadísticas: {e}")
