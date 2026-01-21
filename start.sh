@@ -1,7 +1,7 @@
 #!/bin/bash
 set -o errexit
 
-echo "🚀 Iniciando Bot de File2Link - V2 MEJORADA..."
+echo "🚀 Iniciando Bot de File2Link - V2 OPTIMIZADO PARA 512MB RAM..."
 
 # ===========================================
 # FASE 1: OPTIMIZACIONES DEL SISTEMA
@@ -45,21 +45,23 @@ fi
 echo "✅ Todas las variables de entorno configuradas"
 
 # ===========================================
-# FASE 3: INICIALIZACIÓN MEJORADA
+# FASE 3: INICIALIZACIÓN OPTIMIZADA
 # ===========================================
 
-echo "🎯 Iniciando bot V2 mejorado..."
-echo "📊 CONFIGURACIÓN MEJORADA:"
-echo "   • Seguridad: URLs con hash como primer bot ✅"
-echo "   • Sistema: Usuarios completos y estadísticas ✅"
-echo "   • Cola: Límites anti-abuso y concurrente ✅"
-echo "   • Admin: Comandos /users y /broadcast ✅"
+echo "🎯 Iniciando bot V2 optimizado para 512MB RAM..."
+echo "==========================================="
+echo "⚡ OPTIMIZACIONES DE MEMORIA:"
+echo "   • Streaming de archivos (sin cargar en RAM) ✅"
+echo "   • Límite de 50 usuarios en caché ✅"
+echo "   • Límite de 30 archivos por usuario ✅"
+echo "   • Eliminado psutil (ahorro 30-50MB RAM) ✅"
+echo "   • Cleanup automático cada 30 minutos ✅"
 echo "==========================================="
 echo "🔐 Hash security: Activado"
-echo "👥 User system: Activado"
-echo "📊 Stats system: Activado"
+echo "👥 User system: Con límites inteligentes"
+echo "📊 Stats system: Optimizado"
 echo "🔄 Queue system: Mejorado"
 echo "==========================================="
 
-# Ejecutar el bot
+# Ejecutar el bot optimizado
 exec python main.py
