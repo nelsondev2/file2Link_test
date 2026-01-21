@@ -2,18 +2,20 @@ import os
 import time
 import urllib.parse
 import logging
-from flask import Flask, send_from_directory, jsonify, render_template_string, request, send_file, make_response
+from flask import Flask, Response, jsonify, render_template_string, request, send_file, make_response
 from werkzeug.utils import safe_join
+from io import BytesIO
 
-from config import BASE_DIR, RENDER_DOMAIN, MAX_FILE_SIZE_MB, HASH_EXPIRE_DAYS
+from config import BASE_DIR, RENDER_DOMAIN, MAX_FILE_SIZE_MB, HASH_EXPIRE_DAYS, MAX_CACHED_USERS, MAX_FILES_PER_USER
 from load_manager import load_manager
 from file_service import file_service
-from url_utils import decode_filename_from_url  # NUEVO IMPORT
+from url_utils import decode_filename_from_url
 
 logger = logging.getLogger(__name__)
 
 # ===== CREAR LA APLICACIÓN FLASK PRIMERO =====
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB límite
 
 # ===== FUNCIONES AUXILIARES =====
 def get_directory_structure(startpath):
@@ -133,6 +135,7 @@ def file_browser():
                     <p><strong>Total de Archivos:</strong> {{ total_files }}</p>
                     <p><strong>Espacio Usado:</strong> {{ total_size }}</p>
                     <p><strong>Usuarios Registrados:</strong> {{ total_users }}</p>
+                    <p><strong>Optimización RAM:</strong> ✅ ACTIVA ({{ max_users }} usuarios máx)</p>
                 </div>
                 
                 <div class="file-structure">
@@ -160,7 +163,8 @@ def file_browser():
             base_dir=directory,
             total_files=total_files,
             total_size=format_file_size(total_size),
-            total_users=total_users
+            total_users=total_users,
+            max_users=MAX_CACHED_USERS
         )
         
     except Exception as e:
@@ -240,6 +244,17 @@ def home():
                 border-radius: 25px;
                 font-weight: bold;
                 font-size: 0.9rem;
+            }}
+            
+            .ram-badge {{
+                display: inline-block;
+                background: #3498db;
+                color: white;
+                padding: 8px 20px;
+                border-radius: 25px;
+                font-weight: bold;
+                font-size: 0.9rem;
+                margin-left: 10px;
             }}
             
             .btn {{
@@ -358,6 +373,19 @@ def home():
                 color: #7f8c8d;
             }}
             
+            .optimization {{
+                background: #2c3e50;
+                color: white;
+                padding: 20px;
+                border-radius: 10px;
+                margin: 20px 0;
+            }}
+            
+            .optimization h4 {{
+                color: #3498db;
+                margin-bottom: 10px;
+            }}
+            
             @media (max-width: 768px) {{
                 .header h1 {{
                     font-size: 2rem;
@@ -376,9 +404,10 @@ def home():
     <body>
         <div class="container">
             <div class="header">
-                <h1>🤖 Nelson File2Link - V2 Mejorado</h1>
+                <h1>🤖 Nelson File2Link - V2 Optimizado</h1>
                 <div class="status-badge">✅ ACTIVO Y FUNCIONANDO</div>
-                <p>Servidor profesional de archivos via Telegram con seguridad mejorada</p>
+                <div class="ram-badge">⚡ OPTIMIZADO 512MB RAM</div>
+                <p>Servidor profesional de archivos via Telegram con optimización de memoria</p>
                 <p><strong>📏 Tamaño máximo por archivo: {MAX_FILE_SIZE_MB} MB</strong></p>
                 
                 <a href="https://t.me/nelson_file2link_bot" class="btn btn-telegram">🚀 Usar el Bot en Telegram</a>
@@ -386,6 +415,15 @@ def home():
                 <a href="/health" class="btn">❤️ Health Check</a>
                 <a href="/files" class="btn">📁 Explorador de Archivos</a>
                 <a href="/api/stats" class="btn">📈 Estadísticas API</a>
+            </div>
+
+            <div class="optimization">
+                <h4>⚡ OPTIMIZACIONES DE MEMORIA ACTIVAS:</h4>
+                <p>• Streaming de archivos (sin cargar en RAM)</p>
+                <p>• Límite: {MAX_CACHED_USERS} usuarios en caché</p>
+                <p>• Límite: {MAX_FILES_PER_USER} archivos por usuario</p>
+                <p>• Cleanup automático cada 30 minutos</p>
+                <p>• Sin psutil (ahorro de 30-50MB RAM)</p>
             </div>
 
             <div class="stats">
@@ -409,107 +447,96 @@ def home():
 
             <div class="features">
                 <div class="feature-card">
+                    <div class="feature-icon">⚡</div>
+                    <h4>Optimización RAM</h4>
+                    <p>Sistema optimizado para funcionar en 512MB sin sobrecargar</p>
+                </div>
+                
+                <div class="feature-card">
                     <div class="feature-icon">🔐</div>
                     <h4>Seguridad Mejorada</h4>
-                    <p>URLs con hash único y temporal como el primer bot, acceso controlado</p>
+                    <p>URLs con hash único y temporal, acceso controlado</p>
                 </div>
                 
                 <div class="feature-card">
                     <div class="feature-icon">📁</div>
                     <h4>Sistema de Usuarios</h4>
-                    <p>Registro automático, estadísticas y gestión completa de usuarios</p>
+                    <p>Registro automático con límites inteligentes</p>
                 </div>
                 
                 <div class="feature-card">
                     <div class="feature-icon">🔄</div>
-                    <h4>Cola Inteligente Mejorada</h4>
-                    <p>Procesamiento optimizado con límites anti-abuso y seguimiento en tiempo real</p>
-                </div>
-                
-                <div class="feature-card">
-                    <div class="feature-icon">⚡</div>
-                    <h4>Descargas Seguras</h4>
-                    <p>URLs protegidas con hash de 12 caracteres y expiración automática</p>
+                    <h4>Cola Inteligente</h4>
+                    <p>Procesamiento optimizado con límites anti-abuso</p>
                 </div>
 
                 <div class="feature-card">
                     <div class="feature-icon">📊</div>
-                    <h4>Estadísticas Completas</h4>
-                    <p>Sistema de administración con comandos /users y /broadcast</p>
+                    <h4>Estadísticas</h4>
+                    <p>Sistema de administración completo</p>
                 </div>
 
                 <div class="feature-card">
                     <div class="feature-icon">🎯</div>
                     <h4>Fácil Gestión</h4>
-                    <p>Comandos mejorados, renombre, eliminación y organización avanzada</p>
+                    <p>Comandos mejorados y organización avanzada</p>
                 </div>
             </div>
 
             <div class="info-section">
-                <h3>🔐 NUEVO: Sistema de URLs Seguras</h3>
-                <p><strong>Antes (vulnerable):</strong> <code>https://dominio.com/storage/12345/downloads/file.zip</code></p>
+                <h3>⚡ NUEVO: Sistema Optimizado para 512MB RAM</h3>
+                <p><strong>Problema anterior:</strong> Consumo excesivo de RAM (>700MB)</p>
+                <p><strong>Solución implementada:</strong></p>
+                <div class="code">
+• Streaming de archivos (evita carga en RAM)
+• Límite de {MAX_CACHED_USERS} usuarios en memoria
+• Límite de {MAX_FILES_PER_USER} archivos por usuario
+• Eliminado psutil (ahorro 30-50MB)
+• Cleanup automático periódico
+• Estructuras de datos optimizadas</div>
+                
+                <h3>🔐 Sistema de URLs Seguras:</h3>
                 <p><strong>Ahora (seguro):</strong> <code>https://dominio.com/download/abc123def456?file=archivo.zip</code></p>
                 <p>• Cada URL tiene hash único de 12 caracteres</p>
                 <p>• Los hashes expiran después de {HASH_EXPIRE_DAYS} días</p>
                 <p>• Imposible adivinar URLs de otros usuarios</p>
-                <p>• Sistema idéntico al primer bot profesional</p>
 
-                <h3>👥 NUEVO: Sistema de Administración</h3>
-                <div class="code">/users - Ver total de usuarios registrados (solo owners)
-/broadcast - Enviar mensaje a todos los usuarios (responde a un mensaje)
+                <h3>👥 Sistema de Administración:</h3>
+                <div class="code">/users - Ver total de usuarios registrados
+/broadcast - Enviar mensaje a todos los usuarios
 /stats - Estadísticas completas del sistema
 /about - Información técnica del bot</div>
                 
-                <h3>🔄 NUEVO: Cola Mejorada</h3>
-                <div class="code">Límite de cola: 20 archivos por usuario máximo
-Procesamiento concurrente: Hasta 2 archivos simultáneos
-Anti-abuso: Sistema detecta y previene sobrecarga
-Comandos: /queue, /clearqueue, /status mejorado</div>
-
-                <h3>📁 Sistema de Carpetas (Mejorado):</h3>
-                <div class="code">/cd downloads - Acceder a archivos de descarga
-/cd packed - Acceder a archivos empaquetados
-/list - Ver archivos en carpeta actual con paginación
-/rename 3 nuevo_nombre - Renombrar archivo #3
-/delete 5 - Eliminar archivo #5
-/clear - Vaciar carpeta actual</div>
-                
-                <h3>📦 Comandos de Empaquetado:</h3>
-                <div class="code">/pack - Crear ZIP con todos los archivos de descarga
-/pack 100 - Dividir en partes de 100MB cada una</div>
-
-                <h3>📏 Especificaciones Técnicas Mejoradas:</h3>
+                <h3>📏 Especificaciones Técnicas Optimizadas:</h3>
                 <div class="code">Tamaño máximo por archivo: {MAX_FILE_SIZE_MB} MB
-Hash de seguridad: 12 caracteres, {HASH_EXPIRE_DAYS} días de validez
-Usuarios: Sistema completo de registro y estadísticas
-Base de datos: JSON optimizado para bajos recursos
-Concurrencia: 1 proceso principal, 2 subidas simultáneas</div>
+Hash de seguridad: 12 caracteres, {HASH_EXPIRE_DAYS} días
+Usuarios en caché: {MAX_CACHED_USERS} máximo
+Archivos por usuario: {MAX_FILES_PER_USER} máximo
+Memoria objetivo: 250-350MB (dentro de 512MB límite)</div>
             </div>
 
             <div class="info-section">
-                <h3>🚀 Endpoints del API Mejorado</h3>
+                <h3>🚀 Endpoints del API Optimizado</h3>
                 <div class="code">/ - Esta página principal
 /health - Verificación de estado del servicio
 /system-status - Estado detallado del sistema
 /api/stats - Estadísticas en JSON
 /files - Explorador de archivos del servidor
-/download/{{hash}}?file=nombre - Descargar archivo seguro
-/packed/{{hash}}?file=nombre - Descargar archivo empaquetado</div>
+/download/{{hash}}?file=nombre - Descargar archivo (STREAMING)
+/packed/{{hash}}?file=nombre - Descargar archivo empaquetado (STREAMING)</div>
                 
                 <h3>🔧 Características Técnicas Avanzadas</h3>
-                <p><strong>Arquitectura:</strong> Bot de Telegram + Servidor Web Flask + Sistema de Hash</p>
-                <p><strong>Seguridad:</strong> URLs con hash temporal, imposible de adivinar</p>
-                <p><strong>Base de datos:</strong> Sistema triple JSON (metadata, usuarios, hashes)</p>
-                <p><strong>Rendimiento:</strong> Optimizado para Render.com con 512MB RAM</p>
-                <p><strong>Escalabilidad:</strong> Cola inteligente con límites anti-abuso</p>
-                <p><strong>Compatibilidad:</strong> 100% compatible con primer bot en seguridad de URLs</p>
+                <p><strong>Arquitectura:</strong> Bot de Telegram + Servidor Web Flask optimizado</p>
+                <p><strong>Seguridad:</strong> URLs con hash temporal, streaming seguro</p>
+                <p><strong>Optimización:</strong> Sistema diseñado para 512MB RAM de Render</p>
+                <p><strong>Compatibilidad:</strong> 100% compatible con funciones originales</p>
             </div>
 
             <div class="info-section" style="text-align: center; background: #2c3e50; color: white;">
-                <h3 style="color: white;">🤖 Nelson File2Link - V2 Mejorado</h3>
-                <p>Combina lo mejor del primer bot (seguridad) con lo mejor del segundo (gestión)</p>
+                <h3 style="color: white;">🤖 Nelson File2Link - V2 Optimizado</h3>
+                <p>Optimizado para funcionar en entornos con recursos limitados (512MB RAM)</p>
                 <p>Sistema profesional de gestión de archivos via Telegram</p>
-                <p>© 2024 - Todos los derechos reservados - Versión Mejorada</p>
+                <p>© 2024 - Versión Optimizada para Bajo Consumo de Memoria</p>
             </div>
         </div>
     </body>
@@ -523,15 +550,21 @@ def health():
     
     return jsonify({
         "status": "online",
-        "service": "nelson-file2link-v2",
+        "service": "nelson-file2link-v2-optimized",
         "bot_status": "running",
         "timestamp": time.time(),
-        "version": "2.0.0",
+        "version": "2.0.1",
         "total_users": total_users,
         "max_file_size_mb": MAX_FILE_SIZE_MB,
         "hash_security": True,
         "queue_system": True,
-        "user_system": True
+        "user_system": True,
+        "memory_optimized": True,
+        "ram_limits": {
+            "max_cached_users": MAX_CACHED_USERS,
+            "max_files_per_user": MAX_FILES_PER_USER,
+            "streaming_enabled": True
+        }
     })
 
 @app.route('/system-status')
@@ -567,28 +600,31 @@ def system_status():
     
     return jsonify({
         "status": "online",
-        "service": "nelson-file2link-v2-enhanced",
+        "service": "nelson-file2link-v2-optimized",
         "timestamp": time.time(),
+        "memory_optimized": True,
         "users": {
             "total_users": total_users,
+            "max_cached_users": MAX_CACHED_USERS,
             "user_system": True,
             "registration_enabled": True
         },
         "security": {
             "hash_enabled": True,
             "hash_expire_days": HASH_EXPIRE_DAYS,
-            "url_protection": "enabled"
+            "url_protection": "enabled",
+            "streaming_enabled": True
         },
         "system_load": status,
         "storage": storage_info,
         "configuration": {
             "max_file_size_mb": MAX_FILE_SIZE_MB,
+            "max_cached_users": MAX_CACHED_USERS,
+            "max_files_per_user": MAX_FILES_PER_USER,
             "max_concurrent_processes": load_manager.max_processes,
-            "max_queue_size": 20,
-            "max_concurrent_uploads": 2,
-            "cpu_usage_limit": status.get('cpu_percent', 0),
-            "memory_usage_percent": status.get('memory_percent', 0),
-            "optimized_for": "low-cpu-environment"
+            "max_queue_size": 10,
+            "max_concurrent_uploads": 1,
+            "optimized_for": "512mb-ram-environment"
         },
         "endpoints": {
             "web_interface": "/",
@@ -627,7 +663,7 @@ def api_stats():
     return jsonify({
         "users": {
             "total": total_users,
-            "registered_users": list(file_service.users.keys())[:10],
+            "max_cached": MAX_CACHED_USERS,
             "registration_active": True
         },
         "files": {
@@ -635,7 +671,8 @@ def api_stats():
             "total_packed": total_files_packed,
             "total_all": total_files_downloads + total_files_packed,
             "total_size_mb": round(total_size / (1024 * 1024), 2),
-            "total_size_gb": round(total_size / (1024 * 1024 * 1024), 3)
+            "total_size_gb": round(total_size / (1024 * 1024 * 1024), 3),
+            "max_per_user": MAX_FILES_PER_USER
         },
         "security": {
             "active_hashes": len(file_service.file_hashes),
@@ -643,8 +680,14 @@ def api_stats():
             "hash_system": "md5_12chars",
             "expire_days": HASH_EXPIRE_DAYS
         },
+        "optimization": {
+            "memory_optimized": True,
+            "streaming_enabled": True,
+            "periodic_cleanup": True,
+            "ram_safe": True
+        },
         "system": {
-            "uptime": load_manager.get_status().get('uptime', 0),
+            "uptime": load_manager.get_status().get('uptime_seconds', 0),
             "active_processes": load_manager.active_processes,
             "max_processes": load_manager.max_processes,
             "timestamp": time.time()
@@ -653,100 +696,83 @@ def api_stats():
 
 @app.route('/download/<file_hash>')
 def secure_download(file_hash):
-    """Descarga segura con hash - VERSIÓN MEJORADA PARA NOMBRES PROBLEMÁTICOS"""
+    """Descarga segura con hash - USANDO STREAMING"""
     try:
         filename = request.args.get('file')
         if not filename:
-            return jsonify({"error": "Nombre de archivo requerido", "usage": "/download/<hash>?file=<filename>"}), 400
+            return jsonify({"error": "Nombre de archivo requerido"}), 400
         
-        # Decodificar nombre de archivo usando utilidad mejorada
+        # Decodificar nombre de archivo
         filename = decode_filename_from_url(filename)
         
         # Verificar hash
         file_info = file_service.get_file_by_hash(file_hash)
         if not file_info:
-            return jsonify({"error": "Hash inválido o expirado", "hash": file_hash, "message": "El enlace no es válido o ha expirado"}), 403
+            return jsonify({"error": "Hash inválido o expirado"}), 403
         
-        # Usar comparación mejorada de nombres
-        from filename_utils import compare_filenames
-        if not compare_filenames(file_info['filename'], filename):
-            logger.warning(f"Nombre no coincide exactamente: almacenado={file_info['filename']}, solicitado={filename}")
-            # Aún así intentar servir el archivo si el hash es válido
-            # (puede ser que el nombre tenga variaciones de encoding o caracteres problemáticos)
-        
-        # Servir el archivo
         user_dir = file_service.get_user_directory(file_info['user_id'], file_info['file_type'])
         file_path = safe_join(user_dir, file_info['filename'])
         
         if not os.path.exists(file_path):
-            # Intentar buscar el archivo por nombre original
-            original_name = file_service.get_original_filename(file_info['user_id'], file_info['filename'], file_info['file_type'])
-            alt_path = safe_join(user_dir, original_name)
-            if os.path.exists(alt_path):
-                file_path = alt_path
-                logger.info(f"Archivo encontrado por nombre alternativo: {original_name}")
-            else:
-                return jsonify({"error": "Archivo no encontrado", "filename": filename, "user_id": file_info['user_id']}), 404
+            return jsonify({"error": "Archivo no encontrado"}), 404
         
-        # Obtener nombre original para el header de descarga
+        # Obtener nombre original
         original_name = file_service.get_original_filename(file_info['user_id'], file_info['filename'], file_info['file_type'])
         
-        # Crear nombre seguro para header (sin caracteres problemáticos)
+        # Crear nombre seguro para header
         from url_utils import fix_problematic_filename
         safe_display_name = fix_problematic_filename(original_name)
         
-        # LEER ARCHIVO Y CREAR RESPUESTA MANUALMENTE
-        with open(file_path, 'rb') as f:
-            file_data = f.read()
+        # STREAMING del archivo (sin cargar en RAM)
+        def generate():
+            with open(file_path, 'rb') as f:
+                while chunk := f.read(8192):  # Bloques de 8KB
+                    yield chunk
         
-        # Crear respuesta manual para control total
-        response = make_response(file_data)
+        response = Response(
+            generate(),
+            mimetype='application/octet-stream',
+            direct_passthrough=True
+        )
         
-        # Headers CORREGIDOS
-        response.headers['Content-Type'] = 'application/octet-stream'
         response.headers['Content-Disposition'] = f'attachment; filename="{safe_display_name}"'
-        response.headers['Content-Length'] = str(len(file_data))
+        response.headers['Content-Length'] = str(os.path.getsize(file_path))
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
         response.headers['Pragma'] = 'no-cache'
         response.headers['Expires'] = '0'
         
-        logger.info(f"✅ Descarga segura: {original_name} -> {safe_display_name} via hash {file_hash[:8]}...")
+        logger.info(f"✅ Descarga streaming: {original_name} via hash {file_hash[:8]}...")
         return response
         
     except Exception as e:
         logger.error(f"Error en descarga segura: {e}", exc_info=True)
-        return jsonify({"error": "Error interno del servidor", "message": str(e)}), 500
+        return jsonify({"error": "Error interno del servidor", "message": str(e)[:100]}), 500
 
 @app.route('/packed/<file_hash>')
 def secure_packed(file_hash):
-    """Descarga de archivos empaquetados con hash - VERSIÓN MEJORADA"""
+    """Descarga de archivos empaquetados con hash - USANDO STREAMING"""
     try:
         filename = request.args.get('file')
         if not filename:
-            return jsonify({"error": "Nombre de archivo requerido", "usage": "/packed/<hash>?file=<filename>"}), 400
+            return jsonify({"error": "Nombre de archivo requerido"}), 400
         
         filename = decode_filename_from_url(filename)
         
         # Verificar hash
         file_info = file_service.get_file_by_hash(file_hash)
         if not file_info:
-            return jsonify({"error": "Hash inválido o expirado", "hash": file_hash}), 403
-        
-        # Usar comparación mejorada de nombres
-        from filename_utils import compare_filenames
-        if not compare_filenames(file_info['filename'], filename):
-            logger.warning(f"Nombre no coincide (packed): almacenado={file_info['filename']}, solicitado={filename}")
+            return jsonify({"error": "Hash inválido o expirado"}), 403
         
         # Verificar que sea tipo packed
         if file_info['file_type'] != 'packed':
-            return jsonify({"error": "Tipo de archivo incorrecto", "expected": "packed", "actual": file_info['file_type']}), 400
+            return jsonify({"error": "Tipo de archivo incorrecto"}), 400
         
         user_dir = file_service.get_user_directory(file_info['user_id'], "packed")
         file_path = safe_join(user_dir, file_info['filename'])
         
         if not os.path.exists(file_path):
-            return jsonify({"error": "Archivo empaquetado no encontrado", "filename": filename}), 404
+            return jsonify({"error": "Archivo empaquetado no encontrado"}), 404
         
         # Obtener nombre original
         original_name = file_service.get_original_filename(file_info['user_id'], file_info['filename'], "packed")
@@ -755,28 +781,31 @@ def secure_packed(file_hash):
         from url_utils import fix_problematic_filename
         safe_display_name = fix_problematic_filename(original_name)
         
-        # LEER ARCHIVO MANUALMENTE
-        with open(file_path, 'rb') as f:
-            file_data = f.read()
+        # STREAMING del archivo
+        def generate():
+            with open(file_path, 'rb') as f:
+                while chunk := f.read(8192):
+                    yield chunk
         
-        # Crear respuesta manual
-        response = make_response(file_data)
+        response = Response(
+            generate(),
+            mimetype='application/octet-stream',
+            direct_passthrough=True
+        )
         
-        # Headers CORREGIDOS
-        response.headers['Content-Type'] = 'application/octet-stream'
         response.headers['Content-Disposition'] = f'attachment; filename="{safe_display_name}"'
-        response.headers['Content-Length'] = str(len(file_data))
+        response.headers['Content-Length'] = str(os.path.getsize(file_path))
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
         response.headers['Pragma'] = 'no-cache'
         response.headers['Expires'] = '0'
         
-        logger.info(f"✅ Packed download: {original_name} -> {safe_display_name} via hash {file_hash[:8]}...")
+        logger.info(f"✅ Packed download streaming: {original_name} via hash {file_hash[:8]}...")
         return response
         
     except Exception as e:
         logger.error(f"Error en packed download: {e}", exc_info=True)
-        return jsonify({"error": "Error interno del servidor", "message": str(e)}), 500
+        return jsonify({"error": "Error interno del servidor"}), 500
 
 @app.errorhandler(404)
 def not_found(error):
@@ -793,7 +822,8 @@ def not_found(error):
             "/download/<hash>?file=<filename>",
             "/packed/<hash>?file=<filename>"
         ],
-        "documentation": "Visita / para ver la documentación completa"
+        "optimized": True,
+        "memory_safe": True
     }), 404
 
 @app.errorhandler(500)
@@ -803,7 +833,8 @@ def internal_error(error):
         "error": "Error interno del servidor",
         "message": "Ha ocurrido un error inesperado",
         "timestamp": time.time(),
-        "service": "nelson-file2link-v2"
+        "service": "nelson-file2link-v2-optimized",
+        "optimized": True
     }), 500
 
 # ===== EJECUCIÓN DIRECTA (solo para desarrollo) =====
