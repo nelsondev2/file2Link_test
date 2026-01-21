@@ -8,6 +8,12 @@ RENDER_DOMAIN = os.getenv("RENDER_DOMAIN", "https://nelson-file2link.onrender.co
 BASE_DIR = "storage"
 PORT = int(os.getenv("PORT", 8080))
 
+# ===== LÍMITES ESTRICTOS PARA REDUCIR RAM =====
+MAX_CACHED_USERS = 50  # Máximo usuarios en caché
+MAX_FILES_PER_USER = 30  # Máximo archivos por usuario
+MAX_METADATA_SIZE_MB = 5  # Máximo tamaño de metadata
+CLEANUP_INTERVAL = 1800  # Limpiar cada 30 minutos (1800 segundos)
+
 # Configuración optimizada para CPU limitada
 MAX_PART_SIZE_MB = 100
 COMPRESSION_TIMEOUT = 600
@@ -18,12 +24,12 @@ CPU_USAGE_LIMIT = 80
 MAX_FILE_SIZE_MB = 2000
 MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024
 
-# ⬇️ Configuración para descarga rápida
-DOWNLOAD_BUFFER_SIZE = 131072
+# ⬇️ Configuración para descarga rápida (REDUCIDO para ahorrar RAM)
+DOWNLOAD_BUFFER_SIZE = 65536  # Reducido de 131072
 DOWNLOAD_THREADS = 1
 DOWNLOAD_TIMEOUT = 3600
 MAX_RETRIES = 3
-CHUNK_SIZE = 65536
+CHUNK_SIZE = 32768  # Reducido de 65536
 
 # ===== NUEVAS CONFIGURACIONES =====
 # Administración
@@ -37,9 +43,9 @@ BIN_CHANNEL = os.getenv("BIN_CHANNEL", None)
 HASH_SALT = os.getenv("HASH_SALT", "nelson_file2link_secure_salt")
 HASH_EXPIRE_DAYS = int(os.getenv("HASH_EXPIRE_DAYS", "30"))
 
-# Queue limits
-MAX_QUEUE_SIZE = 20
-MAX_CONCURRENT_UPLOADS = 1  # CAMBIADO: De 2 a 1 para procesar uno por uno
+# Queue limits (REDUCIDOS para ahorrar RAM)
+MAX_QUEUE_SIZE = 10  # Reducido de 20
+MAX_CONCURRENT_UPLOADS = 1  # Procesar uno por uno
 QUEUE_PROCESSING_TIMEOUT = 3600
 
 # ===== VALIDACIÓN Y CORRECCIÓN AUTOMÁTICA =====
@@ -79,3 +85,5 @@ if config_errors:
     print("\nConfigura las variables en Render.com → Environment Variables")
 else:
     print(f"✅ Configuración validada: RENDER_DOMAIN={RENDER_DOMAIN}")
+    print(f"⚡ Configuración optimizada para 512MB RAM")
+    print(f"📊 Límites: {MAX_CACHED_USERS} usuarios, {MAX_FILES_PER_USER} archivos/usuario")
