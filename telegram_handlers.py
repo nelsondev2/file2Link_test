@@ -146,6 +146,7 @@ user_queues_manager = OptimizedUserQueues()
 user_current_processing = {}
 user_progress_messages = {}
 user_progress_data = {}
+user_sessions = {}  # Variable faltante agregada
 
 # Estadísticas globales optimizadas
 global_stats = {
@@ -161,6 +162,12 @@ def get_user_queue_lock(user_id):
     if user_id not in user_queues_manager.locks:
         user_queues_manager.locks[user_id] = asyncio.Lock()
     return user_queues_manager.locks[user_id]
+
+def get_user_session(user_id):
+    """Obtiene o crea la sesión del usuario"""
+    if user_id not in user_sessions:
+        user_sessions[user_id] = {'current_folder': 'downloads'}
+    return user_sessions[user_id]
 
 # ===== FUNCIONES AUXILIARES OPTIMIZADAS =====
 async def send_to_bin_channel(client, text):
@@ -196,7 +203,7 @@ def force_garbage_collection():
     except:
         pass
 
-# ===== COMANDOS DE ADMINISTRACIÓN (sin cambios) =====
+# ===== COMANDOS DE ADMINISTRACIÓN =====
 async def users_command(client, message):
     """Comando /users - Solo para owners"""
     try:
@@ -307,7 +314,40 @@ async def stats_command(client, message):
         logger.error(f"Error en /stats: {e}")
         await message.reply_text("❌ Error obteniendo estadísticas.")
 
-# ===== COMANDOS BÁSICOS (sin cambios excepto optimizaciones) =====
+async def about_command(client, message):
+    """Comando /about"""
+    try:
+        user_id = message.from_user.id
+        
+        if not file_service.is_user_exist(user_id):
+            file_service.add_user(user_id, message.from_user.first_name)
+        
+        about_text = f"""🤖 **Bot de Archivos - Optimizado**
+
+**Funciones principales:**
+• Subir archivos hasta {MAX_FILE_SIZE_MB} MB
+• Descargar desde enlaces seguros
+• Empaquetar en ZIP
+• Renombrar y organizar
+
+**📏 Especificaciones:**
+• Tamaño máximo: {MAX_FILE_SIZE_MB} MB
+• Archivos en cola: {MAX_QUEUE_SIZE}
+• Enlaces válidos por {file_service.HASH_EXPIRE_DAYS} días
+• Usuarios en caché: {MAX_CACHED_USERS} máximo
+
+**⚡ Optimización:**
+• Sistema para 512MB RAM
+• Streaming de archivos
+• Cleanup automático"""
+
+        await message.reply_text(about_text)
+        
+    except Exception as e:
+        logger.error(f"Error en /about: {e}")
+        await message.reply_text("❌ Error mostrando información.")
+
+# ===== COMANDOS BÁSICOS =====
 async def start_command(client, message):
     """Maneja el comando /start"""
     try:
@@ -342,6 +382,7 @@ async def start_command(client, message):
 **🔄 GESTIÓN:**
 `/queue` - Ver cola de descargas
 `/clearqueue` - Limpiar cola
+`/status` - Tu estado
 
 **📏 LÍMITE:** {MAX_FILE_SIZE_MB} MB por archivo
 **⚡ OPTIMIZADO:** Sistema para 512MB RAM
@@ -395,6 +436,463 @@ Límite: {MAX_QUEUE_SIZE} archivos en cola
 
     except Exception as e:
         logger.error(f"Error en /help: {e}")
+
+async def cd_command(client, message):
+    """Maneja el comando /cd - Cambiar carpeta actual"""
+    try:
+        user_id = message.from_user.id
+        
+        if not file_service.is_user_exist(user_id):
+            file_service.add_user(user_id, message.from_user.first_name)
+        
+        session = get_user_session(user_id)
+        args = message.text.split()
+        
+        if len(args) == 1:
+            current = session['current_folder']
+            await message.reply_text(f"📂 **Carpeta actual:** `{current}`")
+        else:
+            folder = args[1].lower()
+            if folder in ['downloads', 'packed']:
+                session['current_folder'] = folder
+                await message.reply_text(f"📂 **Cambiado a carpeta:** `{folder}`")
+            else:
+                await message.reply_text(
+                    "❌ **Carpeta no válida.**\n\n"
+                    "**Carpetas disponibles:**\n"
+                    "• `downloads` - Tus archivos de descarga\n"  
+                    "• `packed` - Archivos empaquetados"
+                )
+
+    except Exception as e:
+        logger.error(f"Error en /cd: {e}")
+        await message.reply_text("❌ Error al cambiar carpeta.")
+
+async def list_command(client, message):
+    """Maneja el comando /list - Listar archivos de la carpeta actual"""
+    try:
+        user_id = message.from_user.id
+        
+        if not file_service.is_user_exist(user_id):
+            file_service.add_user(user_id, message.from_user.first_name)
+        
+        session = get_user_session(user_id)
+        current_folder = session['current_folder']
+        
+        files = file_service.list_user_files(user_id, current_folder)
+        
+        if not files:
+            await message.reply_text(
+                f"📂 **Carpeta {current_folder} vacía.**\n\n"
+                f"**Para agregar archivos:**\n"
+                f"• Envía archivos al bot (van a 'downloads')\n"
+                f"• Usa `/pack` para crear archivos en 'packed'\n"
+            )
+            return
+        
+        folder_display = "📥 DESCARGAS" if current_folder == "downloads" else "📦 EMPAQUETADOS"
+        files_text = f"**{folder_display}**\n"
+        files_text += f"**Total de archivos:** {len(files)}\n\n"
+        
+        for file_info in files:
+            # Mostrar nombre original pero truncado si es muy largo
+            display_name = file_info['name']
+            if len(display_name) > 40:
+                display_name = display_name[:37] + "..."
+            
+            files_text += f"**#{file_info['number']}** - `{display_name}`\n"
+            files_text += f"📏 **Tamaño:** {file_info['size_mb']:.1f} MB\n"
+            files_text += f"🔗 **Enlace:** [Descargar]({file_info['url']})\n\n"
+
+        files_text += f"\n**Comandos disponibles:**\n"
+        files_text += f"• `/delete <número>` - Eliminar archivo\n"
+        files_text += f"• `/rename <número> <nuevo_nombre>` - Renombrar\n"
+        files_text += f"• `/clear` - Vaciar carpeta completa"
+
+        if len(files_text) > 4000:
+            parts = []
+            current_part = ""
+            
+            for line in files_text.split('\n'):
+                if len(current_part + line + '\n') > 4000:
+                    parts.append(current_part)
+                    current_part = line + '\n'
+                else:
+                    current_part += line + '\n'
+            
+            if current_part:
+                parts.append(current_part)
+            
+            await message.reply_text(parts[0], disable_web_page_preview=True)
+            
+            for part in parts[1:]:
+                await message.reply_text(part, disable_web_page_preview=True)
+        else:
+            await message.reply_text(files_text, disable_web_page_preview=True)
+
+    except Exception as e:
+        logger.error(f"Error en /list: {e}")
+        await message.reply_text("❌ Error al listar archivos.")
+
+async def delete_command(client, message):
+    """Maneja el comando /delete - Eliminar archivo actual"""
+    try:
+        user_id = message.from_user.id
+        
+        if not file_service.is_user_exist(user_id):
+            file_service.add_user(user_id, message.from_user.first_name)
+        
+        session = get_user_session(user_id)
+        current_folder = session['current_folder']
+        args = message.text.split()
+        
+        if len(args) < 2:
+            await message.reply_text(
+                "❌ **Formato incorrecto.**\n\n"
+                "**Uso:** `/delete <número>`\n"
+                "**Ejemplo:** `/delete 5`\n\n"
+                "Usa `/list` para ver los números de archivo."
+            )
+            return
+        
+        try:
+            file_number = int(args[1])
+        except ValueError:
+            await message.reply_text("❌ El número debe ser un valor numérico válido.")
+            return
+        
+        success, result_message = file_service.delete_file_by_number(user_id, file_number, current_folder)
+        
+        if success:
+            await message.reply_text(f"✅ **{result_message}**")
+        else:
+            await message.reply_text(f"❌ **{result_message}**")
+            
+    except Exception as e:
+        logger.error(f"Error en /delete: {e}")
+        await message.reply_text("❌ Error al eliminar archivo.")
+
+async def clear_command(client, message):
+    """Maneja el comando /clear - Vaciar carpeta actual"""
+    try:
+        user_id = message.from_user.id
+        
+        if not file_service.is_user_exist(user_id):
+            file_service.add_user(user_id, message.from_user.first_name)
+        
+        session = get_user_session(user_id)
+        current_folder = session['current_folder']
+        
+        success, result_message = file_service.delete_all_files(user_id, current_folder)
+        
+        if success:
+            await message.reply_text(f"✅ **{result_message}**")
+        else:
+            await message.reply_text(f"❌ **{result_message}**")
+            
+    except Exception as e:
+        logger.error(f"Error en /clear: {e}")
+        await message.reply_text("❌ Error al vaciar carpeta.")
+
+async def rename_command(client, message):
+    """Maneja el comando /rename - Renombrar archivo actual"""
+    try:
+        user_id = message.from_user.id
+        
+        if not file_service.is_user_exist(user_id):
+            file_service.add_user(user_id, message.from_user.first_name)
+        
+        session = get_user_session(user_id)
+        current_folder = session['current_folder']
+        args = message.text.split(maxsplit=2)
+        
+        if len(args) < 3:
+            await message.reply_text(
+                "❌ **Formato incorrecto.**\n\n"
+                "**Uso:** `/rename <número> <nuevo_nombre>`\n"
+                "**Ejemplo:** `/rename 3 mi_documento_importante`\n\n"
+                "Usa `/list` para ver los números de archivo."
+            )
+            return
+        
+        try:
+            file_number = int(args[1])
+        except ValueError:
+            await message.reply_text("❌ El número debe ser un valor numérico válido.")
+            return
+        
+        new_name = args[2].strip()
+        
+        if not new_name:
+            await message.reply_text("❌ El nuevo nombre no puede estar vacío.")
+            return
+        
+        success, result_message, new_url = file_service.rename_file(user_id, file_number, new_name, current_folder)
+        
+        if success:
+            response_text = f"✅ **{result_message}**\n\n"
+            response_text += f"**Nuevo enlace:**\n"
+            response_text += f"🔗 [{new_name}]({new_url})"
+            
+            await message.reply_text(
+                response_text,
+                disable_web_page_preview=True
+            )
+        else:
+            await message.reply_text(f"❌ **{result_message}**")
+            
+    except Exception as e:
+        logger.error(f"Error en comando /rename: {e}")
+        await message.reply_text("❌ Error al renombrar archivo.")
+
+async def status_command(client, message):
+    """Maneja el comando /status"""
+    try:
+        user_id = message.from_user.id
+        
+        if not file_service.is_user_exist(user_id):
+            file_service.add_user(user_id, message.from_user.first_name)
+        
+        session = get_user_session(user_id)
+        
+        downloads_count = len(file_service.list_user_files(user_id, "downloads"))
+        packed_count = len(file_service.list_user_files(user_id, "packed"))
+        total_size = file_service.get_user_storage_usage(user_id)
+        size_mb = total_size / (1024 * 1024)
+        
+        queue_size = user_queues_manager.queue_size(user_id)
+        is_processing = user_id in user_current_processing
+        
+        status_text = f"""📊 **TU INFORMACIÓN**
+
+**👤 USUARIO:**
+• Carpeta actual: `{session['current_folder']}`
+• Archivos descargados: {downloads_count}
+• Archivos empaquetados: {packed_count}
+• Espacio usado: {size_mb:.2f} MB
+
+**🔄 COLA:**
+• Archivos en cola: {queue_size}
+• Procesando: {"Sí" if is_processing else "No"}
+• Límite: {MAX_QUEUE_SIZE} archivos
+
+**⚡ OPTIMIZACIÓN:**
+• Sistema para 512MB RAM
+• Límites inteligentes activos"""
+
+        await message.reply_text(status_text)
+        
+    except Exception as e:
+        logger.error(f"Error en /status: {e}")
+        await message.reply_text("❌ Error al obtener estado.")
+
+async def pack_command(client, message):
+    """Maneja el comando /pack - Empaquetado"""
+    try:
+        user_id = message.from_user.id
+        
+        if not file_service.is_user_exist(user_id):
+            file_service.add_user(user_id, message.from_user.first_name)
+        
+        command_parts = message.text.split()
+        
+        system_status = load_manager.get_status()
+        if not system_status['can_accept_work']:
+            await message.reply_text(
+                f"⚠️ **Sistema sobrecargado.**\n\n"
+                f"CPU: {system_status['cpu_percent']:.1f}%\n"
+                f"Procesos activos: {system_status['active_processes']}\n"
+                f"Intenta nuevamente en unos minutos."
+            )
+            return
+        
+        split_size = None
+        if len(command_parts) > 1:
+            try:
+                split_size = int(command_parts[1])
+                if split_size <= 0:
+                    await message.reply_text("❌ El tamaño de división debe ser mayor a 0 MB")
+                    return
+                if split_size > 200:
+                    await message.reply_text("❌ El tamaño máximo por parte es 200 MB")
+                    return
+            except ValueError:
+                await message.reply_text("❌ Formato incorrecto. Usa: `/pack` o `/pack 100`")
+                return
+        
+        status_msg = await message.reply_text(
+            "📦 **Iniciando empaquetado...**\n\n"
+            "Uniendo todos tus archivos en un ZIP seguro..."
+        )
+        
+        def run_simple_packing():
+            try:
+                files, status_message = packing_service.pack_folder(user_id, split_size)
+                return files, status_message
+            except Exception as e:
+                logger.error(f"Error en empaquetado: {e}")
+                return None, f"Error al empaquetar: {str(e)}"
+        
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(run_simple_packing)
+            files, status_message = future.result(timeout=300)
+        
+        if not files:
+            await status_msg.edit_text(f"❌ {status_message}")
+            return
+        
+        if len(files) == 1:
+            file_info = files[0]
+            total_files_info = f" ({file_info['total_files']} archivos)" if 'total_files' in file_info else ""
+            
+            response_text = f"""✅ **Empaquetado completado{total_files_info}**
+
+**Archivo:** `{file_info['filename']}`
+**Tamaño:** {file_info['size_mb']:.1f} MB
+
+**Enlace de descarga:**
+🔗 [{file_info['filename']}]({file_info['url']})"""
+            
+            await status_msg.edit_text(
+                response_text, 
+                disable_web_page_preview=True
+            )
+            
+        else:
+            total_files = 0
+            for file_info in files:
+                if 'total_files' in file_info:
+                    total_files = file_info['total_files']
+                    break
+            
+            total_files_info = f" ({total_files} archivos)" if total_files > 0 else ""
+            
+            response_text = f"""✅ **Empaquetado completado{total_files_info}**
+
+**Archivos:** {len(files)} partes
+**Tamaño Total:** {sum(f['size_mb'] for f in files):.1f} MB
+
+**Enlaces de descarga:**"""
+            
+            for file_info in files:
+                response_text += f"\n\n**Parte {file_info['number']}:** 🔗 [{file_info['filename']}]({file_info['url']})"
+            
+            response_text += "\n\n**Nota:** Usa `/cd packed` y `/list` para ver tus archivos empaquetados"
+            
+            if len(response_text) > 4000:
+                await status_msg.edit_text("✅ **Empaquetado completado**\n\nLos enlaces se enviarán en varios mensajes...")
+                
+                for file_info in files:
+                    part_text = f"**Parte {file_info['number']}:** 🔗 [{file_info['filename']}]({file_info['url']})"
+                    await message.reply_text(part_text, disable_web_page_preview=True)
+            else:
+                await status_msg.edit_text(
+                    response_text, 
+                    disable_web_page_preview=True
+                )
+                
+        logger.info(f"Empaquetado completado para usuario {user_id}: {len(files)} archivos")
+        
+    except concurrent.futures.TimeoutError:
+        await status_msg.edit_text("❌ El empaquetado tardó demasiado tiempo. Intenta con menos archivos.")
+    except Exception as e:
+        logger.error(f"Error en comando /pack: {e}")
+        await message.reply_text("❌ Error en el proceso de empaquetado.")
+
+async def queue_command(client, message):
+    """Maneja el comando /queue - Ver estado de la cola de descargas"""
+    try:
+        user_id = message.from_user.id
+        
+        if not file_service.is_user_exist(user_id):
+            file_service.add_user(user_id, message.from_user.first_name)
+        
+        queue_size = user_queues_manager.queue_size(user_id)
+        
+        if queue_size == 0:
+            await message.reply_text("📭 **Cola vacía**\n\nNo hay archivos en cola de descarga.")
+            return
+        
+        current_processing = "✅ **EN PROCESO AHORA**" if user_id in user_current_processing else "⏸️ **Esperando turno**"
+        
+        queue_text = f"📋 **Estado de la Cola - {queue_size} archivo(s)**\n\n"
+        queue_text += f"**Estado actual:** {current_processing}\n"
+        queue_text += f"**Límite de cola:** {MAX_QUEUE_SIZE} archivos\n"
+        queue_text += f"**Procesamiento:** UNO POR UNO (orden estricto)\n\n"
+        queue_text += f"**Archivos en cola:**\n"
+        
+        # Mostrar solo los primeros 5 archivos para ahorrar espacio
+        queue_items = list(user_queues_manager.get_queue(user_id))[:5]
+        for i, file_data in enumerate(queue_items, 1):
+            file_name = file_data.get('file_name', 'Desconocido')
+            file_size = file_data.get('file_size', 0)
+            size_mb = file_size / (1024 * 1024) if file_size > 0 else 0
+            
+            queue_text += f"**#{i}** - {file_name} ({size_mb:.1f} MB)\n"
+        
+        if queue_size > 5:
+            queue_text += f"\n... y {queue_size - 5} archivo(s) más"
+        
+        queue_text += f"\n\n**Comandos:**\n"
+        queue_text += f"• `/clearqueue` - Limpiar cola completa"
+        
+        await message.reply_text(queue_text)
+        
+    except Exception as e:
+        logger.error(f"Error en /queue: {e}")
+        await message.reply_text("❌ Error al obtener estado de la cola.")
+
+async def clear_queue_command(client, message):
+    """Maneja el comando /clearqueue - Limpiar cola de descargas"""
+    try:
+        user_id = message.from_user.id
+        
+        if not file_service.is_user_exist(user_id):
+            file_service.add_user(user_id, message.from_user.first_name)
+        
+        queue_size = user_queues_manager.queue_size(user_id)
+        if queue_size == 0:
+            await message.reply_text("📭 **Cola ya está vacía**")
+            return
+        
+        user_queues_manager.clear_queue(user_id)
+        cleanup_user_session(user_id)
+        
+        await message.reply_text(f"🗑️ **Cola limpiada**\n\nSe removieron {queue_size} archivos de la cola.")
+        
+    except Exception as e:
+        logger.error(f"Error en /clearqueue: {e}")
+        await message.reply_text("❌ Error al limpiar la cola.")
+
+async def cleanup_command(client, message):
+    """Limpia archivos temporales y optimiza el sistema"""
+    try:
+        user_id = message.from_user.id
+        
+        if not file_service.is_user_exist(user_id):
+            file_service.add_user(user_id, message.from_user.first_name)
+        
+        status_msg = await message.reply_text("🧹 **Limpiando y optimizando sistema...**")
+        
+        expired_count = file_service.cleanup_expired_hashes()
+        
+        total_size = file_service.get_user_storage_usage(user_id)
+        size_mb = total_size / (1024 * 1024)
+        
+        downloads_count = len(file_service.list_user_files(user_id, "downloads"))
+        packed_count = len(file_service.list_user_files(user_id, "packed"))
+        
+        await status_msg.edit_text(
+            f"✅ **Limpieza completada**\n\n"
+            f"• Hashes expirados limpiados: {expired_count}\n"
+            f"• Tus archivos downloads: {downloads_count}\n"
+            f"• Tus archivos packed: {packed_count}\n"
+            f"• Tu espacio usado: {size_mb:.2f} MB"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error en comando cleanup: {e}")
+        await message.reply_text("❌ Error durante la limpieza.")
 
 # ===== MANEJO DE ARCHIVOS OPTIMIZADO =====
 async def handle_file(client, message):
@@ -767,73 +1265,7 @@ def cleanup_user_session(user_id):
     # Forzar garbage collection
     force_garbage_collection()
 
-# ===== COMANDOS DE COLA OPTIMIZADOS =====
-async def queue_command(client, message):
-    """Maneja el comando /queue - Ver estado de la cola de descargas"""
-    try:
-        user_id = message.from_user.id
-        
-        if not file_service.is_user_exist(user_id):
-            file_service.add_user(user_id, message.from_user.first_name)
-        
-        queue_size = user_queues_manager.queue_size(user_id)
-        
-        if queue_size == 0:
-            await message.reply_text("📭 **Cola vacía**\n\nNo hay archivos en cola de descarga.")
-            return
-        
-        current_processing = "✅ **EN PROCESO AHORA**" if user_id in user_current_processing else "⏸️ **Esperando turno**"
-        
-        queue_text = f"📋 **Estado de la Cola - {queue_size} archivo(s)**\n\n"
-        queue_text += f"**Estado actual:** {current_processing}\n"
-        queue_text += f"**Límite de cola:** {MAX_QUEUE_SIZE} archivos\n"
-        queue_text += f"**Procesamiento:** UNO POR UNO (orden estricto)\n\n"
-        queue_text += f"**Archivos en cola:**\n"
-        
-        # Mostrar solo los primeros 5 archivos para ahorrar espacio
-        queue_items = list(user_queues_manager.get_queue(user_id))[:5]
-        for i, file_data in enumerate(queue_items, 1):
-            file_name = file_data.get('file_name', 'Desconocido')
-            file_size = file_data.get('file_size', 0)
-            size_mb = file_size / (1024 * 1024) if file_size > 0 else 0
-            
-            queue_text += f"**#{i}** - {file_name} ({size_mb:.1f} MB)\n"
-        
-        if queue_size > 5:
-            queue_text += f"\n... y {queue_size - 5} archivo(s) más"
-        
-        queue_text += f"\n\n**Comandos:**\n"
-        queue_text += f"• `/clearqueue` - Limpiar cola completa"
-        
-        await message.reply_text(queue_text)
-        
-    except Exception as e:
-        logger.error(f"Error en /queue: {e}")
-        await message.reply_text("❌ Error al obtener estado de la cola.")
-
-async def clear_queue_command(client, message):
-    """Maneja el comando /clearqueue - Limpiar cola de descargas"""
-    try:
-        user_id = message.from_user.id
-        
-        if not file_service.is_user_exist(user_id):
-            file_service.add_user(user_id, message.from_user.first_name)
-        
-        queue_size = user_queues_manager.queue_size(user_id)
-        if queue_size == 0:
-            await message.reply_text("📭 **Cola ya está vacía**")
-            return
-        
-        user_queues_manager.clear_queue(user_id)
-        cleanup_user_session(user_id)
-        
-        await message.reply_text(f"🗑️ **Cola limpiada**\n\nSe removieron {queue_size} archivos de la cola.")
-        
-    except Exception as e:
-        logger.error(f"Error en /clearqueue: {e}")
-        await message.reply_text("❌ Error al limpiar la cola.")
-
-# ===== SETUP DE HANDLERS (sin cambios) =====
+# ===== SETUP DE HANDLERS =====
 def setup_handlers(client):
     """Configura todos los handlers del bot"""
     # Comandos básicos
