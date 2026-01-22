@@ -1,0 +1,342 @@
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+import threading
+import requests
+import time
+import os
+import json
+
+# Paleta de colores Premium para Termux X11
+COLOR_BG = "#121212"          # Fondo ultra oscuro
+COLOR_CARD = "#1e1e1e"        # Tarjetas/Contenedores
+COLOR_PRIMARY = "#00d2ff"     # Cian brillante
+COLOR_SUCCESS = "#00ff88"     # Verde neón
+COLOR_ERROR = "#ff3e3e"       # Rojo vibrante
+COLOR_TEXT = "#ffffff"        # Blanco puro
+COLOR_TEXT_DIM = "#b0b0b0"    # Gris plata
+COLOR_ACCENT = "#ffdf00"      # Amarillo Oro para iconos
+CONFIG_FILE = "download_config.json"
+
+class ConfigManager:
+    """Maneja la persistencia de la configuración del usuario."""
+    @staticmethod
+    def load():
+        defaults = {
+            "dest_folder": os.path.join(os.path.expanduser("~"), "Downloads"),
+            "max_simultaneous": 2
+        }
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, "r") as f:
+                    return {**defaults, **json.load(f)}
+            except:
+                return defaults
+        return defaults
+
+    @staticmethod
+    def save(config):
+        try:
+            with open(CONFIG_FILE, "w") as f:
+                json.dump(config, f)
+        except:
+            pass
+
+class DownloadManagerApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("TURBO DOWNLOADER PRO")
+        
+        # Adaptación dinámica de tamaño para pantallas móviles en X11
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        
+        width = int(screen_width * 0.96) if screen_width < 1000 else 1000
+        height = int(screen_height * 0.88) if screen_height < 1000 else 750
+        self.root.geometry(f"{width}x{height}")
+        self.root.configure(bg=COLOR_BG)
+
+        self.config = ConfigManager.load()
+        self.dest_folder = self.config["dest_folder"]
+        self.max_simultaneous = tk.IntVar(value=self.config["max_simultaneous"])
+        
+        self.queue = [] 
+        self.active_count = 0
+        self.lock = threading.Lock()
+        
+        self.pause_events = {}
+        self.cancel_flags = {}
+
+        self.url_var = tk.StringVar()
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+        }
+
+        self.setup_styles()
+        self.create_header()
+        self.create_body()
+        self.create_footer()
+
+    def setup_styles(self):
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        # Estilo de la Tabla
+        style.configure("Treeview", 
+                        background=COLOR_CARD, 
+                        foreground=COLOR_TEXT, 
+                        rowheight=50, 
+                        fieldbackground=COLOR_CARD,
+                        borderwidth=0,
+                        font=('Segoe UI', 10))
+        
+        style.configure("Treeview.Heading", 
+                        font=('Segoe UI', 10, 'bold'), 
+                        background="#2c2c2c", 
+                        foreground=COLOR_PRIMARY,
+                        relief="flat")
+        
+        style.map("Treeview", background=[('selected', "#333333")])
+
+        # Scrollbar Estético
+        style.configure("Vertical.TScrollbar", gripcount=0, background="#444", troughcolor=COLOR_BG, bordercolor=COLOR_BG, arrowcolor=COLOR_PRIMARY)
+
+    def create_header(self):
+        header = tk.Frame(self.root, bg=COLOR_BG, pady=15, padx=20)
+        header.pack(fill=tk.X)
+
+        # Línea de Título
+        top_row = tk.Frame(header, bg=COLOR_BG)
+        top_row.pack(fill=tk.X, pady=(0, 15))
+
+        tk.Label(top_row, text="⚡ TURBO DOWNLOADER", font=('Segoe UI', 16, 'bold'), bg=COLOR_BG, fg=COLOR_PRIMARY).pack(side=tk.LEFT)
+
+        btn_clear = tk.Button(top_row, text="🗑️ LIMPIAR LISTA", command=self.clear_all_list, 
+                             bg=COLOR_ERROR, fg="white", font=('Segoe UI', 9, 'bold'), 
+                             relief="flat", padx=15, pady=5, activebackground="#d63031", cursor="hand2")
+        btn_clear.pack(side=tk.RIGHT)
+
+        # Línea de Configuración
+        settings_row = tk.Frame(header, bg=COLOR_BG)
+        settings_row.pack(fill=tk.X, pady=(0, 15))
+        
+        tk.Label(settings_row, text="⚙️ Descargas simultáneas:", bg=COLOR_BG, fg=COLOR_TEXT_DIM, font=('Segoe UI', 10)).pack(side=tk.LEFT)
+        spin = tk.Spinbox(settings_row, from_=1, to=10, textvariable=self.max_simultaneous, 
+                          width=5, command=self.save_current_config, bg=COLOR_CARD, fg=COLOR_PRIMARY, 
+                          buttonbackground=COLOR_PRIMARY, relief="flat", font=('Segoe UI', 10, 'bold'), justify='center')
+        spin.pack(side=tk.LEFT, padx=15)
+
+        # Entrada de URL estilizada como una barra de búsqueda moderna
+        input_container = tk.Frame(header, bg="#2d2d2d", padx=2, pady=2)
+        input_container.pack(fill=tk.X)
+        
+        input_frame = tk.Frame(input_container, bg=COLOR_CARD, padx=10, pady=8)
+        input_frame.pack(fill=tk.X)
+
+        tk.Label(input_frame, text="🔗", bg=COLOR_CARD, fg=COLOR_TEXT_DIM, font=('Segoe UI', 12)).pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.entry_url = tk.Entry(input_frame, textvariable=self.url_var, bg=COLOR_CARD, fg=COLOR_TEXT, 
+                                 insertbackground=COLOR_PRIMARY, relief="flat", font=('Segoe UI', 11), highlightthickness=0)
+        self.entry_url.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.entry_url.insert(0, "Pegue el enlace aquí...")
+        self.entry_url.bind("<FocusIn>", lambda e: self.entry_url.delete(0, tk.END) if self.url_var.get() == "Pegue el enlace aquí..." else None)
+
+        btn_add = tk.Button(input_frame, text="➕ AGREGAR", command=self.add_to_queue, 
+                           bg=COLOR_PRIMARY, fg="#000", font=('Segoe UI', 10, 'bold'), 
+                           relief="flat", padx=20, pady=5, activebackground=COLOR_SUCCESS)
+        btn_add.pack(side=tk.RIGHT, padx=(10, 0))
+
+    def create_body(self):
+        body_frame = tk.Frame(self.root, bg=COLOR_BG, padx=20, pady=5)
+        body_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Contenedor con borde para la tabla
+        table_border = tk.Frame(body_frame, bg="#333", padx=1, pady=1)
+        table_border.pack(fill=tk.BOTH, expand=True)
+
+        columns = ("filename", "size", "progress", "speed", "status")
+        self.tree = ttk.Treeview(table_border, columns=columns, show="headings", style="Treeview")
+        
+        headings = {"filename": "📦 Archivo", "size": "⚖️ Tamaño", "progress": "📊 Progreso", "speed": "🚀 Velocidad", "status": "📝 Estado"}
+        for col, text in headings.items():
+            self.tree.heading(col, text=text)
+            self.tree.column(col, anchor=tk.CENTER, width=100)
+
+        self.tree.column("filename", width=200, anchor=tk.W)
+        self.tree.column("progress", width=200)
+        
+        scrollbar = ttk.Scrollbar(table_border, orient=tk.VERTICAL, command=self.tree.yview, style="Vertical.TScrollbar")
+        self.tree.configure(yscroll=scrollbar.set)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.tree.bind("<Double-1>", self.toggle_pause)
+        
+        # Menú contextual con iconos
+        self.context_menu = tk.Menu(self.root, tearoff=0, bg="#252525", fg=COLOR_TEXT, font=('Segoe UI', 10), activebackground=COLOR_PRIMARY)
+        self.context_menu.add_command(label="⏸️ Pausar / Reanudar", command=self.toggle_pause)
+        self.context_menu.add_command(label="📂 Abrir Carpeta", command=self.open_file_location)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="🗑️ Eliminar de la lista", command=self.remove_item)
+        
+        self.tree.bind("<Button-3>", lambda e: self.context_menu.post(e.x_root, e.y_root))
+
+    def create_footer(self):
+        footer = tk.Frame(self.root, bg=COLOR_CARD, padx=20, pady=10)
+        footer.pack(fill=tk.X, side=tk.BOTTOM)
+        
+        tk.Button(footer, text="📁 CAMBIAR DESTINO", command=self.choose_directory, 
+                 bg="#333", fg=COLOR_ACCENT, font=('Segoe UI', 8, 'bold'), 
+                 relief="flat", padx=10, pady=3).pack(side=tk.LEFT)
+
+        self.path_display = tk.Label(footer, text=f"📍 {self.dest_folder}", bg=COLOR_CARD, fg=COLOR_TEXT_DIM, font=('Segoe UI', 9))
+        self.path_display.pack(side=tk.LEFT, padx=15)
+
+    def save_current_config(self):
+        self.config["dest_folder"] = self.dest_folder
+        self.config["max_simultaneous"] = self.max_simultaneous.get()
+        ConfigManager.save(self.config)
+
+    def choose_directory(self):
+        path = filedialog.askdirectory(initialdir=self.dest_folder)
+        if path:
+            self.dest_folder = path
+            self.path_display.config(text=f"📍 {self.dest_folder}")
+            self.save_current_config()
+
+    def add_to_queue(self):
+        url = self.url_var.get().strip()
+        if not url or url == "Pegue el enlace aquí...": return
+        
+        filename = url.split("/")[-1].split("?")[0] or f"descarga_{int(time.time())}"
+        filepath = os.path.join(self.dest_folder, filename)
+        
+        item_id = self.tree.insert("", tk.END, values=(f"📄 {filename}", "---", "0%", "---", "⏳ En Cola"))
+        self.pause_events[item_id] = threading.Event()
+        self.pause_events[item_id].set() 
+        self.cancel_flags[item_id] = False
+
+        self.queue.append((url, filepath, item_id))
+        self.url_var.set("")
+        self.process_queue()
+
+    def process_queue(self):
+        with self.lock:
+            while self.active_count < self.max_simultaneous.get() and self.queue:
+                url, filepath, item_id = self.queue.pop(0)
+                if not self.tree.exists(item_id): continue
+                self.active_count += 1
+                threading.Thread(target=self.download_engine, args=(url, filepath, item_id), daemon=True).start()
+
+    def toggle_pause(self, event=None):
+        selected = self.tree.selection()
+        if not selected: return
+        item_id = selected[0]
+        if item_id in self.pause_events:
+            status = self.tree.set(item_id, "status")
+            if "Terminado" in status or "Error" in status: return
+            
+            if self.pause_events[item_id].is_set():
+                self.pause_events[item_id].clear()
+                self.update_status(item_id, "status", "⏸️ Pausado")
+            else:
+                self.pause_events[item_id].set()
+                self.update_status(item_id, "status", "⬇️ Descargando")
+
+    def download_engine(self, url, filepath, item_id):
+        try:
+            self.update_status(item_id, "status", "📡 Conectando")
+            
+            with requests.get(url, headers=self.headers, stream=True, timeout=15) as r:
+                r.raise_for_status()
+                total_size = int(r.headers.get('content-length', 0))
+                
+                self.update_status(item_id, "size", self.format_size(total_size) if total_size > 0 else "???")
+                self.update_status(item_id, "status", "⬇️ Descargando")
+
+                downloaded = 0
+                start_time = time.time()
+                
+                with open(filepath, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=16384): 
+                        if self.cancel_flags.get(item_id, False):
+                            f.close()
+                            if os.path.exists(filepath): os.remove(filepath)
+                            return
+                        
+                        self.pause_events[item_id].wait()
+                        
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            
+                            if downloaded % (16384*25) == 0 or downloaded == total_size:
+                                self.refresh_ui_progress(item_id, downloaded, total_size, start_time)
+
+            if not self.cancel_flags.get(item_id, False):
+                self.update_status(item_id, "status", "✅ Terminado")
+                self.update_status(item_id, "progress", "100% [██████████]")
+                self.update_status(item_id, "speed", "---")
+
+        except Exception as e:
+            if not self.cancel_flags.get(item_id, False):
+                self.update_status(item_id, "status", "❌ Error")
+                print(f"Error: {e}")
+        finally:
+            with self.lock:
+                self.active_count -= 1
+            self.process_queue()
+
+    def refresh_ui_progress(self, item_id, downloaded, total, start_time):
+        elapsed = time.time() - start_time
+        speed = downloaded / elapsed if elapsed > 0 else 0
+        self.update_status(item_id, "speed", f"🚀 {self.format_size(speed)}/s")
+        if total > 0:
+            p = (downloaded / total) * 100
+            bar = "█" * int(p/10) + "░" * (10 - int(p/10))
+            self.update_status(item_id, "progress", f"{p:.1f}% [{bar}]")
+        else:
+            self.update_status(item_id, "progress", f"📥 {self.format_size(downloaded)}")
+
+    def format_size(self, size):
+        if size <= 0: return "---"
+        for unit in ['B','KB','MB','GB']:
+            if size < 1024: return f"{size:.1f}{unit}"
+            size /= 1024
+        return f"{size:.1f}TB"
+
+    def update_status(self, item_id, column, value):
+        if self.tree.exists(item_id):
+            self.root.after(0, lambda: self.tree.set(item_id, column, value))
+
+    def clear_all_list(self):
+        if not self.tree.get_children(): return
+        if messagebox.askyesno("Confirmar", "¿Deseas detener todas las descargas y limpiar la lista?"):
+            for item_id in self.tree.get_children():
+                self.cancel_flags[item_id] = True
+                if item_id in self.pause_events: self.pause_events[item_id].set() 
+            self.queue.clear()
+            self.tree.delete(*self.tree.get_children())
+
+    def remove_item(self):
+        sel = self.tree.selection()
+        if sel:
+            item_id = sel[0]
+            self.cancel_flags[item_id] = True
+            if item_id in self.pause_events: self.pause_events[item_id].set()
+            self.tree.delete(sel)
+
+    def open_file_location(self):
+        try:
+            if os.name == 'nt':
+                os.startfile(self.dest_folder)
+            else:
+                # En sistemas Linux/Termux intentamos abrir el explorador predeterminado
+                import subprocess
+                subprocess.Popen(['xdg-open', self.dest_folder])
+        except:
+            pass
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = DownloadManagerApp(root)
+    root.mainloop()
