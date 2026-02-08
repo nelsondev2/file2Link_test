@@ -13,7 +13,7 @@ class TelegramBot:
         self.is_running = False
     
     async def setup_handlers(self):
-        """Configura todos los handlers del bot (sin callbacks)"""
+        """Configura todos los handlers del bot"""
         setup_handlers(self.client)
     
     async def start_bot(self):
