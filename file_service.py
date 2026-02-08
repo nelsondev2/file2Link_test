@@ -12,7 +12,7 @@ class FileService:
     def __init__(self):
         self.file_mappings = {}
         self.metadata_file = "file_metadata.json"
-        self.users_file = "users.json"  # 🔴 MANTENIDO para compatibilidad, pero no usado para broadcast
+        self.users_file = "users.json"
         self.hashes_file = "file_hashes.json"
         self.HASH_EXPIRE_DAYS = HASH_EXPIRE_DAYS
         
@@ -42,9 +42,9 @@ class FileService:
         except Exception as e:
             logger.error(f"Error guardando meta {e}")
 
-    # ===== SISTEMA DE USUARIOS (SIMPLIFICADO - Solo para registro básico) =====
+    # ===== SISTEMA DE USUARIOS (SIMPLIFICADO) =====
     def load_users(self):
-        """Cargar usuarios desde JSON (MANTENIDO para compatibilidad)"""
+        """Cargar usuarios desde JSON"""
         try:
             if os.path.exists(self.users_file):
                 with open(self.users_file, 'r', encoding='utf-8') as f:
@@ -63,9 +63,8 @@ class FileService:
         except Exception as e:
             logger.error(f"Error guardando usuarios: {e}")
 
-    # 🔴 CORREGIDO: Contar usuarios desde directorios, no desde JSON
     def total_users_count(self):
-        """Contar usuarios totales desde directorios"""
+        """Contar usuarios totales desde directorios (sin broadcast)"""
         try:
             return len([d for d in os.listdir(BASE_DIR) 
                        if os.path.isdir(os.path.join(BASE_DIR, d)) 
@@ -100,8 +99,6 @@ class FileService:
             self.save_users()
             return False
 
-    # 🔴 ELIMINADO: Métodos de broadcast (get_all_users, delete_user)
-
     # ===== SISTEMA DE HASHES DE SEGURIDAD =====
     def load_hashes(self):
         """Cargar hashes de seguridad"""
@@ -125,14 +122,12 @@ class FileService:
 
     def create_file_hash(self, user_id, filename, file_type="downloads"):
         """Crear hash único de seguridad (como primer bot)"""
-        # Crear hash único basado en múltiples factores
         timestamp = int(time.time())
         random_part = os.urandom(8).hex()
         
         hash_data = f"{user_id}_{filename}_{file_type}_{timestamp}_{HASH_SALT}_{random_part}"
         file_hash = hashlib.md5(hash_data.encode()).hexdigest()[:12]
         
-        # Guardar hash con metadata
         hash_key = f"{user_id}_{filename}_{file_type}"
         self.file_hashes[file_hash] = {
             'user_id': user_id,
@@ -191,11 +186,10 @@ class FileService:
         return f"{size:.1f} TB"
 
     def create_download_url(self, user_id, filename):
-        """Crea una URL de descarga segura CON HASH (como primer bot) - CORREGIDO"""
+        """Crea una URL de descarga segura CON HASH"""
         safe_filename = self.sanitize_filename(filename)
         file_hash = self.create_file_hash(user_id, safe_filename, "downloads")
         
-        # CORREGIDO: URL sin barra doble al inicio
         encoded_filename = urllib.parse.quote(safe_filename)
         
         # Asegurar que RENDER_DOMAIN no termine con /
@@ -203,7 +197,7 @@ class FileService:
         return f"{base_url}/download/{file_hash}?file={encoded_filename}"
 
     def create_packed_url(self, user_id, filename):
-        """Crea una URL para archivos empaquetados CON HASH - CORREGIDO"""
+        """Crea una URL para archivos empaquetados CON HASH"""
         safe_filename = self.sanitize_filename(filename)
         file_hash = self.create_file_hash(user_id, safe_filename, "packed")
         
@@ -244,6 +238,7 @@ class FileService:
         files = []
         user_key = f"{user_id}_{file_type}"
         
+        # 🔴 CORREGIDO: self.meta → self.metadata (SyntaxError original)
         if user_key in self.meta
             existing_files = []
             for file_num, file_data in self.metadata[user_key]["files"].items():
@@ -307,7 +302,7 @@ class FileService:
             return None
         
         file_data = self.metadata[user_key]["files"].get(str(file_number))
-        if not file_data:
+        if not file_
             return None
         
         user_dir = self.get_user_directory(user_id, file_type)
@@ -373,15 +368,15 @@ class FileService:
         try:
             user_key = f"{user_id}_{file_type}"
             if user_key not in self.meta
-                return False, "Usuario no encontrado"
+                return False, "Usuario no encontrado", None
             
             file_info = self.get_file_by_number(user_id, file_number, file_type)
             if not file_info:
-                return False, "Archivo no encontrado"
+                return False, "Archivo no encontrado", None
             
             file_data = self.metadata[user_key]["files"].get(str(file_number))
             if not file_
-                return False, "Archivo no encontrado en metadata"
+                return False, "Archivo no encontrado en metadata", None
             
             new_name = self.sanitize_filename(new_name)
             
@@ -389,7 +384,7 @@ class FileService:
             old_path = os.path.join(user_dir, file_data["stored_name"])
             
             if not os.path.exists(old_path):
-                return False, "Archivo físico no encontrado"
+                return False, "Archivo físico no encontrado", None
             
             _, ext = os.path.splitext(file_data["stored_name"])
             new_stored_name = new_name + ext
@@ -525,7 +520,6 @@ class FileService:
             total_files_packed = 0
             total_size = 0
             
-            # 🔴 CORREGIDO: Recorrer directorios directamente
             for user_dir in os.listdir(BASE_DIR):
                 user_path = os.path.join(BASE_DIR, user_dir)
                 if os.path.isdir(user_path) and user_dir.isdigit():
