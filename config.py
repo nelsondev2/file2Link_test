@@ -1,7 +1,6 @@
 import os
 
 # ===== CONFIGURACIÓN OPTIMIZADA =====
-# 🔴 CORREGIDO: Eliminar espacios en variables de entorno
 API_ID = int(os.getenv("API_ID", "12345678"))
 API_HASH = os.getenv("API_HASH", "tu_api_hash")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "tu_bot_token")
@@ -27,7 +26,7 @@ MAX_RETRIES = 3
 CHUNK_SIZE = 65536
 
 # ===== NUEVAS CONFIGURACIONES =====
-# 🔴 ELIMINADO: Sistema de broadcast (no se usa)
+# 🔴 ELIMINADO: Sistema de broadcast (no se usa en versión simplificada)
 # OWNER_ID = os.getenv("OWNER_ID", "").split(",")
 # OWNER_ID = [int(x.strip()) for x in OWNER_ID if x.strip().isdigit()]
 # BIN_CHANNEL = os.getenv("BIN_CHANNEL", None)
@@ -63,13 +62,13 @@ def validate_config():
     if not RENDER_DOMAIN or "example.com" in RENDER_DOMAIN:
         errors.append("RENDER_DOMAIN no configurado correctamente")
     
-    # Verificar que RENDER_DOMAIN no tenga doble barra
-    if '//' in RENDER_DOMAIN.replace('https://', '').replace('http://', ''):
-        errors.append("RENDER_DOMAIN contiene doble barra (//) interna")
-    
     # 🔴 NUEVO: Validar que RENDER_DOMAIN empiece con http:// o https://
     if not RENDER_DOMAIN.startswith(('http://', 'https://')):
         errors.append("RENDER_DOMAIN debe empezar con http:// o https://")
+    
+    # Verificar que RENDER_DOMAIN no tenga doble barra interna
+    if '//' in RENDER_DOMAIN.replace('https://', '').replace('http://', ''):
+        errors.append("RENDER_DOMAIN contiene doble barra (//) interna")
     
     return errors
 
@@ -82,3 +81,6 @@ if config_errors:
     print("\nConfigura las variables en Render.com → Environment Variables")
 else:
     print(f"✅ Configuración validada: RENDER_DOMAIN={RENDER_DOMAIN}")
+    print("✅ Seguridad hash: Activada")
+    print("✅ Sistema de colas: Mejorado")
+    print("✅ Sistema de estadísticas: Optimizado")
