@@ -5,6 +5,7 @@ import asyncio
 import logging
 import time
 import re
+import unicodedata
 from urllib.parse import urlparse, unquote, quote
 from typing import Optional, Tuple
 from config import MAX_FILE_SIZE, DOWNLOAD_TIMEOUT, CHUNK_SIZE, MAX_RETRIES, DOWNLOAD_BUFFER_SIZE
@@ -55,60 +56,37 @@ class URLDownloadService:
         try:
             parsed = urlparse(url)
             path = unquote(parsed.path)
+            query = parsed.query
             
-            # Obtener el último segmento de la path
-            filename = os.path.basename(path)
-            
-            # Limpiar parámetros de query que puedan estar pegados al nombre
-            if '?' in filename:
-                filename = filename.split('?')[0]
-            
-            # Si no hay extensión, buscar en la query
-            if '.' not in filename and parsed.query:
-                # Buscar parámetros comunes de nombre
-                query_params = parsed.query.split('&')
-                for param in query_params:
+            # Primero buscar en parámetros de query
+            if query:
+                params = query.split('&')
+                for param in params:
                     if '=' in param:
                         key, value = param.split('=', 1)
-                        if key.lower() in ['file', 'filename', 'name', 'f', 'archivo']:
-                            candidate = unquote(value)
-                            if '.' in candidate:
-                                filename = candidate.split('/')[-1]
-                                break
+                        if key.lower() in ['name', 'file', 'filename', 'title', 'f']:
+                            filename = unquote(value)
+                            if filename:
+                                # Limpiar el nombre
+                                filename = filename.replace('+', ' ')
+                                return self.sanitize_filename(filename)
             
-            # Si sigue sin tener nombre válido, generar uno basado en timestamp
-            if not filename or filename == '/' or '.' not in filename:
-                # Intentar extraer de la URL completa
-                url_clean = url.split('?')[0].split('#')[0]
-                if '/' in url_clean:
-                    last_part = url_clean.split('/')[-1]
-                    if last_part and '.' in last_part:
-                        filename = last_part
-                    else:
-                        # Extraer posible nombre de subdominio
-                        domain = parsed.netloc.split('.')
-                        if len(domain) >= 2:
-                            filename = f"{domain[-2]}_{int(time.time())}.bin"
-                        else:
-                            filename = f"download_{int(time.time())}.bin"
-                else:
-                    filename = f"download_{int(time.time())}.bin"
+            # Si no hay en query, usar el path
+            filename = os.path.basename(path)
+            if filename and filename != '/':
+                filename = unquote(filename)
+                # Limpiar parámetros después de ?
+                if '?' in filename:
+                    filename = filename.split('?')[0]
+                return self.sanitize_filename(filename)
             
-            # Limpiar caracteres problemáticos
-            filename = re.sub(r'[<>:"/\\|?*%]', '_', filename)
-            filename = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', filename)
-            filename = filename.strip('. ')
-            
-            # Limitar longitud
-            if len(filename) > 200:
-                name, ext = os.path.splitext(filename)
-                filename = name[:195] + ext
-            
-            return filename
+            # Si no se encontró nada, generar nombre basado en dominio
+            domain = parsed.netloc.replace('www.', '').split('.')[0]
+            return f"{domain}_{int(time.time())}.mp4"
             
         except Exception as e:
             logger.warning(f"Error extrayendo nombre de URL: {e}")
-            return f"download_{int(time.time())}.bin"
+            return f"download_{int(time.time())}.mp4"
     
     async def get_filename_from_response(self, url: str, response: aiohttp.ClientResponse) -> str:
         """Obtiene el nombre del archivo de los headers o URL"""
@@ -137,27 +115,47 @@ class URLDownloadService:
         return self.sanitize_filename(self.extract_filename_from_url(url))
     
     def sanitize_filename(self, filename: str) -> str:
-        """Limpia el nombre de archivo de caracteres conflictivos"""
-        # Reemplazar caracteres problemáticos
-        filename = re.sub(r'[<>:"/\\|?*%\x00-\x1f]', '_', filename)
+        """Limpia el nombre de archivo de caracteres conflictivos de forma más agresiva"""
+        if not filename:
+            return f"download_{int(time.time())}.mp4"
+        
+        # Reemplazar caracteres problemáticos en sistemas de archivos
+        # Incluye corchetes, paréntesis y otros caracteres especiales
+        filename = re.sub(r'[<>:"/\\|?*\[\](){}!@#$%^&+=,]', '_', filename)
         
         # Eliminar caracteres de control
         filename = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', filename)
         
-        # Reemplazar espacios múltiples por uno solo
-        filename = re.sub(r'\s+', ' ', filename)
+        # Reemplazar espacios y guiones bajos múltiples por uno solo
+        filename = re.sub(r'[\s_]+', '_', filename)
         
-        # Eliminar puntos y espacios al inicio/final
-        filename = filename.strip('. ')
+        # Eliminar acentos y caracteres especiales
+        filename = unicodedata.normalize('NFKD', filename)
+        filename = filename.encode('ASCII', 'ignore').decode('ASCII')
         
-        # Si el nombre está vacío, generar uno
+        # Eliminar puntos, espacios y guiones al inicio/final
+        filename = filename.strip('. _-')
+        
+        # Asegurar que el nombre no esté vacío
         if not filename:
-            filename = f"download_{int(time.time())}.bin"
+            filename = f"download_{int(time.time())}"
         
-        # Asegurar que tenga extensión (si no, agregar .bin)
+        # Asegurar que tenga extensión
         if '.' not in filename:
-            # Intentar detectar por Content-Type
-            filename += '.bin'
+            # Detectar por Content-Type o extensión común
+            if any(ext in filename.lower() for ext in ['.mp4', '.mkv', '.avi', '.mov']):
+                pass  # Ya tiene extensión
+            else:
+                # Intentar detectar por tipo común de video
+                if 'video' in filename.lower() or 'episode' in filename.lower():
+                    filename += '.mp4'
+                else:
+                    filename += '.bin'
+        
+        # Limitar longitud
+        if len(filename) > 200:
+            name, ext = os.path.splitext(filename)
+            filename = name[:195] + ext
         
         return filename
     
@@ -202,6 +200,7 @@ class URLDownloadService:
         """Descarga un archivo desde una URL directa con máxima velocidad"""
         
         async with self.semaphore:  # Limitar concurrencia
+            temp_file_path = None
             try:
                 if user_id:
                     self.active_downloads[user_id] = True
@@ -241,20 +240,22 @@ class URLDownloadService:
                     # Obtener nombre del archivo
                     filename = await self.get_filename_from_response(url, response)
                     
-                    # Actualizar file_path con el nombre real
+                    # Crear nombre de archivo temporal
+                    temp_filename = f"temp_{int(time.time())}_{os.urandom(4).hex()}"
                     dir_path = os.path.dirname(file_path)
-                    new_file_path = os.path.join(dir_path, filename)
+                    temp_file_path = os.path.join(dir_path, temp_filename)
+                    
+                    # Determinar el nombre final del archivo
+                    final_filename = filename
+                    final_file_path = os.path.join(dir_path, final_filename)
                     
                     # Si el archivo ya existe, agregar número
                     counter = 1
-                    base_name, ext = os.path.splitext(filename)
-                    while os.path.exists(new_file_path):
-                        new_filename = f"{base_name}_{counter}{ext}"
-                        new_file_path = os.path.join(dir_path, new_filename)
+                    base_name, ext = os.path.splitext(final_filename)
+                    while os.path.exists(final_file_path):
+                        final_filename = f"{base_name}_{counter}{ext}"
+                        final_file_path = os.path.join(dir_path, final_filename)
                         counter += 1
-                    
-                    # Actualizar file_path
-                    file_path = new_file_path
                     
                     # Obtener tamaño si no se pudo antes
                     if file_size == 0:
@@ -268,7 +269,7 @@ class URLDownloadService:
                     buffer_size = DOWNLOAD_BUFFER_SIZE  # 128KB
                     
                     # Usar escritura asíncrona con buffer grande
-                    async with aiofiles.open(file_path, 'wb') as f:
+                    async with aiofiles.open(temp_file_path, 'wb') as f:
                         async for chunk in response.content.iter_chunked(buffer_size):
                             if not chunk:
                                 continue
@@ -276,7 +277,8 @@ class URLDownloadService:
                             # Verificar cancelación
                             if user_id and user_id not in self.active_downloads:
                                 await f.close()
-                                os.remove(file_path)
+                                if os.path.exists(temp_file_path):
+                                    os.remove(temp_file_path)
                                 return False, 0, "Descarga cancelada por el usuario"
                             
                             await f.write(chunk)
@@ -291,37 +293,52 @@ class URLDownloadService:
                     # Callback final
                     if progress_callback and downloaded > 0:
                         await progress_callback(downloaded, file_size or downloaded)
+                    
+                    # Renombrar archivo temporal al nombre final
+                    # Verificar que el archivo temporal existe
+                    if not os.path.exists(temp_file_path):
+                        return False, 0, "Error: Archivo temporal no encontrado"
+                    
+                    # Intentar renombrar
+                    try:
+                        os.rename(temp_file_path, final_file_path)
+                    except Exception as rename_error:
+                        logger.error(f"Error renombrando archivo: {rename_error}")
+                        # Si falla el rename, intentar copiar y luego eliminar
+                        import shutil
+                        shutil.copy2(temp_file_path, final_file_path)
+                        os.remove(temp_file_path)
                 
                 elapsed = time.time() - start_time
                 speed = downloaded / elapsed if elapsed > 0 else 0
                 
                 logger.info(f"✅ URL descargada: {filename} en {elapsed:.1f}s ({speed/1024/1024:.1f} MB/s)")
                 
-                return True, downloaded, filename
+                return True, downloaded, final_filename
                 
             except asyncio.CancelledError:
                 logger.warning(f"Descarga cancelada: {url}")
-                if os.path.exists(file_path):
+                if temp_file_path and os.path.exists(temp_file_path):
                     try:
-                        os.remove(file_path)
+                        os.remove(temp_file_path)
                     except:
                         pass
                 return False, 0, "Descarga cancelada"
                 
             except asyncio.TimeoutError:
                 logger.error(f"Timeout descargando {url}")
-                if os.path.exists(file_path):
+                if temp_file_path and os.path.exists(temp_file_path):
                     try:
-                        os.remove(file_path)
+                        os.remove(temp_file_path)
                     except:
                         pass
                 return False, 0, "Timeout: La descarga tomó demasiado tiempo"
                 
             except Exception as e:
                 logger.error(f"Error descargando desde URL: {e}", exc_info=True)
-                if os.path.exists(file_path):
+                if temp_file_path and os.path.exists(temp_file_path):
                     try:
-                        os.remove(file_path)
+                        os.remove(temp_file_path)
                     except:
                         pass
                 return False, 0, str(e)
